@@ -10,24 +10,81 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION
+
 if TYPE_CHECKING:
     import ezdxf
+    from PIL.Image import Image as PILImage
 
 log = structlog.get_logger()
+
+# JPEG quality above ~95 costs bytes without visible gain; below 1 is invalid.
+_JPEG_QUALITY_RANGE = (1, 95)
+
+
+def _resize_and_encode(
+    img: PILImage,
+    max_dimension: int | None,
+    quality: int | None,
+) -> dict[str, str]:
+    """Downscale img to fit max_dimension and encode it for transport.
+
+    max_dimension caps the longest side in pixels; None or any non-positive value
+    means full resolution. Images already within the cap are never upscaled.
+    This is the parameter that controls an LLM's token cost for the image, which
+    is ceil(w/28) * ceil(h/28) visual tokens — a function of dimensions only.
+
+    quality (clamped to 1-95) switches encoding to JPEG; None keeps lossless PNG.
+    Note that quality shrinks the transferred/stored payload but does NOT reduce
+    token cost, since the token count ignores encoded size. Downscaling a screenshot
+    can even make a PNG *larger* (resampling antialiases crisp linework into
+    gradients that deflate compresses poorly) without changing what it costs to
+    read — so treat quality as a bytes-on-disk lever, not a usage lever.
+
+    Returns {"data": base64 payload, "mime": mime type}.
+    """
+    from PIL import Image
+
+    longest = max(img.size)
+    if max_dimension and max_dimension > 0 and longest > max_dimension:
+        scale = max_dimension / longest
+        new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+        img = img.resize(new_size, Image.LANCZOS)
+
+    buf = io.BytesIO()
+    if quality is None:
+        img.save(buf, format="PNG")
+        mime = "image/png"
+    else:
+        low, high = _JPEG_QUALITY_RANGE
+        if img.mode != "RGB":
+            img = img.convert("RGB")  # JPEG has no alpha channel
+        img.save(buf, format="JPEG", quality=max(low, min(high, quality)))
+        mime = "image/jpeg"
+
+    return {"data": base64.b64encode(buf.getvalue()).decode("ascii"), "mime": mime}
 
 
 class ScreenshotProvider(ABC):
     """Abstract screenshot provider."""
 
     @abstractmethod
-    def capture(self) -> str | None:
-        """Return base64-encoded PNG, or None if capture fails."""
+    def capture(
+        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+    ) -> dict[str, str] | None:
+        """Return {"data": base64-encoded image, "mime": mime type}, or None if capture fails.
+
+        max_dimension caps the longest side in pixels (None = full resolution).
+        quality (1-95), if given, encodes as JPEG instead of PNG for a smaller payload.
+        """
 
 
 class NullScreenshotProvider(ScreenshotProvider):
     """No-op provider — always returns None."""
 
-    def capture(self) -> str | None:
+    def capture(
+        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+    ) -> dict[str, str] | None:
         return None
 
 
@@ -45,11 +102,14 @@ class MatplotlibScreenshotProvider(ScreenshotProvider):
     def doc(self, value: ezdxf.document.Drawing):
         self._doc = value
 
-    def capture(self) -> str | None:
+    def capture(
+        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+    ) -> dict[str, str] | None:
         if self._doc is None:
             return None
         try:
             import matplotlib
+            from PIL import Image
 
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
@@ -67,7 +127,9 @@ class MatplotlibScreenshotProvider(ScreenshotProvider):
             fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.1)
             plt.close(fig)
             buf.seek(0)
-            return base64.b64encode(buf.read()).decode("ascii")
+            img = Image.open(buf)
+            img.load()
+            return _resize_and_encode(img, max_dimension, quality)
         except Exception as e:
             log.warning("matplotlib_screenshot_failed", error=str(e))
             return None
@@ -130,7 +192,9 @@ class Win32ScreenshotProvider(ScreenshotProvider):
 
         return win32gui.GetWindowRect(self._hwnd)
 
-    def capture(self) -> str | None:
+    def capture(
+        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+    ) -> dict[str, str] | None:
         if sys.platform != "win32":
             return None
         try:
@@ -186,11 +250,6 @@ class Win32ScreenshotProvider(ScreenshotProvider):
                     0,
                     1,
                 )
-
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                buf.seek(0)
-                return base64.b64encode(buf.read()).decode("ascii")
             finally:
                 if bitmap is not None:
                     win32gui.DeleteObject(bitmap.GetHandle())
@@ -200,6 +259,10 @@ class Win32ScreenshotProvider(ScreenshotProvider):
                     mfc_dc.DeleteDC()
                 if hwnd_dc is not None:
                     win32gui.ReleaseDC(self._hwnd, hwnd_dc)
+
+            # Resize/encode is pure CPU work — do it after the GDI handles are
+            # released rather than holding a window DC for the duration.
+            return _resize_and_encode(img, max_dimension, quality)
 
         except Exception as e:
             log.warning("win32_screenshot_failed", error=str(e))

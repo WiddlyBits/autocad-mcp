@@ -11,6 +11,7 @@ import ezdxf
 import structlog
 
 from autocad_mcp.backends.base import AutoCADBackend, BackendCapabilities, CommandResult
+from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION
 from autocad_mcp.screenshot import MatplotlibScreenshotProvider
 
 log = structlog.get_logger()
@@ -729,8 +730,10 @@ class EzdxfBackend(AutoCADBackend):
 
     # --- View ---
 
-    async def get_screenshot(self) -> CommandResult:
-        data = self._screenshot.capture()
+    async def get_screenshot(
+        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+    ) -> CommandResult:
+        data = self._screenshot.capture(max_dimension=max_dimension, quality=quality)
         if data:
             return CommandResult(ok=True, payload=data)
         return CommandResult(ok=False, error="Screenshot render failed")

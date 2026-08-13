@@ -147,9 +147,25 @@ You should see `backend: "file_ipc"` if AutoCAD is running, or `backend: "ezdxf"
 |-----------|-------------|
 | `zoom_extents` | Zoom to show all entities |
 | `zoom_window` | Zoom to a specified window |
-| `get_screenshot` | Capture current AutoCAD view as PNG |
+| `get_screenshot` | Capture current AutoCAD view as an image |
 
 Screenshots use `PrintWindow` (Win32) for the File IPC backend — works even when AutoCAD is minimized or in the background. The ezdxf backend renders via matplotlib.
+
+`get_screenshot` accepts two sizing parameters, since screenshots dominate token usage in long automation sessions:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_dimension` | `1280` | Cap on the longest side in pixels (clamped to 64–2576). Pass `null` for full resolution; non-positive values are treated as full resolution. Never upscales. |
+| `quality` | `null` | If set (clamped to 1–95), encodes JPEG instead of PNG. Shrinks the transferred payload; does **not** reduce token cost. |
+
+**`max_dimension` is the parameter that controls cost.** Vision models bill an image as `ceil(width/28) * ceil(height/28)` visual tokens — a function of dimensions only, independent of file size or format. A 2560×1440 window costs 4,784 visual tokens uncapped and 1,196 at `max_dimension=1280`; a 1928×1218 window costs 3,036 and 1,334 respectively. Halving the cap roughly quarters the cost.
+
+Two consequences worth knowing:
+
+- **`quality` is not a cost lever.** JPEG shrinks bytes on the wire, not tokens. Its compression artifacts on thin linework and small text buy nothing in usage terms, so reach for it only when transfer or storage size actually matters.
+- **Downscaling can make the PNG bigger.** Resampling turns crisp 1px linework into antialiased gradients that deflate compresses poorly — a 1928×1218 AutoCAD capture measured 124 KB uncapped and 253 KB at 1280. The token cost still falls by more than half, so the default is right; just don't expect the file to shrink.
+
+The upper clamp is 2576 because the vision API downscales anything longer before the model sees it (and caps one image at 4,784 visual tokens), so larger captures are transmitted and then discarded. The global default is set by `AUTOCAD_MCP_SCREENSHOT_MAX_DIM`; the other tools' `include_screenshot` option always uses that default.
 
 ### `system` — Server management
 
@@ -181,6 +197,7 @@ The File IPC backend sends keystrokes to AutoCAD's MDIClient window via `PostMes
 | `AUTOCAD_MCP_IPC_DIR` | `C:/temp` | Directory for IPC command/result JSON files (must match on both Python and LISP sides) |
 | `AUTOCAD_MCP_IPC_TIMEOUT` | `10.0` | IPC command timeout in seconds (1-300) |
 | `AUTOCAD_MCP_ONLY_TEXT` | `false` | Disable screenshot capture (text feedback only) |
+| `AUTOCAD_MCP_SCREENSHOT_MAX_DIM` | `1280` | Default cap on a screenshot's longest side in pixels (64–2576). Invalid values fall back to the default. |
 
 > **Note:** If you change `AUTOCAD_MCP_IPC_DIR`, you must also update the `*mcp-ipc-dir*` variable in `mcp_dispatch.lsp` to match.
 

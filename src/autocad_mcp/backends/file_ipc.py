@@ -21,7 +21,7 @@ from pathlib import Path
 import structlog
 
 from autocad_mcp.backends.base import AutoCADBackend, BackendCapabilities, CommandResult
-from autocad_mcp.config import IPC_DIR, IPC_TIMEOUT, LISP_DIR
+from autocad_mcp.config import IPC_DIR, IPC_TIMEOUT, LISP_DIR, SCREENSHOT_MAX_DIMENSION
 
 log = structlog.get_logger()
 
@@ -489,9 +489,11 @@ class FileIPCBackend(AutoCADBackend):
     async def zoom_window(self, x1, y1, x2, y2) -> CommandResult:
         return await self._dispatch("zoom-window", {"x1": x1, "y1": y1, "x2": x2, "y2": y2})
 
-    async def get_screenshot(self) -> CommandResult:
+    async def get_screenshot(
+        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+    ) -> CommandResult:
         if self._screenshot_provider:
-            data = self._screenshot_provider.capture()
+            data = self._screenshot_provider.capture(max_dimension=max_dimension, quality=quality)
             if data:
                 return CommandResult(ok=True, payload=data)
         return CommandResult(ok=False, error="Screenshot capture failed")

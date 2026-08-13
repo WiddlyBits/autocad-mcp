@@ -15,6 +15,7 @@ from autocad_mcp.client import (
     add_screenshot_if_available,
     get_backend,
 )
+from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION
 
 # FastMCP validates return types via Pydantic. Tools that may return
 # ImageContent (screenshot) alongside TextContent need a union return type.
@@ -423,13 +424,23 @@ async def view(
     y1: float | None = None,
     x2: float | None = None,
     y2: float | None = None,
+    max_dimension: int | None = SCREENSHOT_MAX_DIMENSION,
+    quality: int | None = None,
 ) -> ToolResult:
     """Viewport control and screenshot capture.
 
     Operations:
       zoom_extents   — Zoom to show all entities.
       zoom_window    — Zoom to window: x1, y1, x2, y2
-      get_screenshot — Capture current view as PNG image.
+      get_screenshot — Capture current view as an image. Downscaled to
+                        max_dimension px on the longest side by default (pass
+                        None for full resolution). max_dimension is the lever
+                        that controls token cost: images bill as
+                        ceil(w/28) * ceil(h/28) visual tokens, so halving the
+                        cap roughly quarters the cost. Raise it when you need to
+                        read small dimension text; lower it for layout checks.
+                        quality (1-95) encodes JPEG instead of PNG — that shrinks
+                        the transferred payload but does not reduce token cost.
     """
     backend = await get_backend()
 
@@ -440,13 +451,15 @@ async def view(
         result = await backend.zoom_window(x1, y1, x2, y2)
         return _json(result.to_dict())
     elif operation == "get_screenshot":
-        result = await backend.get_screenshot()
+        result = await backend.get_screenshot(max_dimension=max_dimension, quality=quality)
         if result.ok and result.payload:
             from mcp.types import ImageContent, TextContent
 
             return [
                 TextContent(type="text", text=_json({"ok": True, "screenshot": "attached"})),
-                ImageContent(type="image", data=result.payload, mimeType="image/png"),
+                ImageContent(
+                    type="image", data=result.payload["data"], mimeType=result.payload["mime"]
+                ),
             ]
         return _json(result.to_dict())
     else:
