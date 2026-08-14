@@ -1,0 +1,25 @@
+# mcp-snapshot v1
+entities 7 approx 3 unmeasured 0 truncated no
+hidden-layers 0
+extents-header none
+extents-computed 20.000000 20.000000 135.000000 65.000000
+layer PID-ANNOTATION count 3 bbox 25.000000 48.000000 121.000000 65.000000 exact no
+layer PID-EQUIPMENT count 2 bbox 20.000000 20.000000 135.000000 60.000000 exact yes
+layer PID-PROCESS-PIPING count 1 bbox 60.000000 40.000000 105.000000 40.000000 exact yes
+layer PID-VALVES count 1 bbox 87.000000 35.000000 93.000000 45.000000 exact yes
+text PID-ANNOTATION 25.000000 62.000000 h 3.000000 "TK-101"
+text PID-ANNOTATION 112.000000 58.000000 h 3.000000 "P-101"
+text PID-ANNOTATION 85.000000 48.000000 h 2.000000 "V-101"
+grid 24x12 20.000000 20.000000 135.000000 65.000000
+grid | .###.................... |
+grid | #########..........###.. |
+grid | #.......#..........####. |
+grid | #.......#....##...##..## |
+grid | #.......#....##...#....# |
+grid | #.......#.....#..##....# |
+grid | #.......##########.....# |
+grid | #.......#.....##.#.....# |
+grid | #.......#.....#..##....# |
+grid | #.......#.........##..## |
+grid | #.......#..........####. |
+grid | #########............... |

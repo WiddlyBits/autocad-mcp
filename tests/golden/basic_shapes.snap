@@ -1,0 +1,22 @@
+# mcp-snapshot v1
+entities 6 approx 1 unmeasured 0 truncated no
+hidden-layers 0
+extents-header none
+extents-computed 0.000000 0.000000 200.000000 100.000000
+layer ANNOTATION count 1 bbox 10.000000 90.000000 46.000000 95.000000 exact no
+layer BORDER count 1 bbox 0.000000 0.000000 200.000000 100.000000 exact yes
+layer SHAPES count 4 bbox 10.000000 10.000000 170.000000 80.000000 exact yes
+text ANNOTATION 10.000000 90.000000 h 5.000000 "BASIC SHAPES"
+grid 24x12 0.000000 0.000000 200.000000 100.000000
+grid | ######################## |
+grid | ######.................# |
+grid | #.........####.........# |
+grid | #........##..##.####...# |
+grid | #.......##....###..##..# |
+grid | #....##.#......#....#..# |
+grid | #...###.#......#....#..# |
+grid | #..##..###....##.......# |
+grid | #.##...#.##..##........# |
+grid | ####...#######.........# |
+grid | ##.....................# |
+grid | ######################## |
