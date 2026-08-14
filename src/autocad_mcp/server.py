@@ -19,6 +19,25 @@ from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION
 
 # FastMCP validates return types via Pydantic. Tools that may return
 # ImageContent (screenshot) alongside TextContent need a union return type.
+#
+# Every tool below must be registered with structured_output=False. FastMCP wraps
+# any annotated return type in a generated output schema (`{"result": ...}`) and
+# then serialises the whole return value into structuredContent *alongside* the
+# normal content blocks. Measured on mcp 1.26.0, that applies to `str`,
+# `str | list`, and `list[TextContent | ImageContent]` alike — only an absent
+# annotation or an unparameterised `list`/`dict` avoids it. The union is not what
+# triggers this, so narrowing the alias would not fix it.
+#
+# The result is that every payload goes out twice. For text results the duplicate
+# is merely wasteful; for a screenshot it is severe, because the image ships once
+# as a real image block (billed as ceil(w/28) * ceil(h/28) visual tokens) and once
+# as raw base64 text. Base64 of a compressed PNG is effectively random, so it
+# tokenises at roughly one token per character — far more than the image it
+# duplicates, and unlike the image it lands in ordinary context where it is
+# re-read on every subsequent request.
+#
+# The content blocks clients actually consume are byte-identical either way.
+# See tests/test_structured_output.py.
 ToolResult = str | list
 
 log = structlog.get_logger()
@@ -31,7 +50,10 @@ mcp = FastMCP("autocad-mcp")
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "AutoCAD Drawing Operations", "readOnlyHint": False})
+@mcp.tool(
+    annotations={"title": "AutoCAD Drawing Operations", "readOnlyHint": False},
+    structured_output=False,
+)
 @_safe("drawing")
 async def drawing(
     operation: str,
@@ -86,7 +108,10 @@ async def drawing(
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "AutoCAD Entity Operations", "readOnlyHint": False})
+@mcp.tool(
+    annotations={"title": "AutoCAD Entity Operations", "readOnlyHint": False},
+    structured_output=False,
+)
 @_safe("entity")
 async def entity(
     operation: str,
@@ -188,7 +213,10 @@ async def entity(
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "AutoCAD Layer Operations", "readOnlyHint": False})
+@mcp.tool(
+    annotations={"title": "AutoCAD Layer Operations", "readOnlyHint": False},
+    structured_output=False,
+)
 @_safe("layer")
 async def layer(
     operation: str,
@@ -237,7 +265,10 @@ async def layer(
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "AutoCAD Block Operations", "readOnlyHint": False})
+@mcp.tool(
+    annotations={"title": "AutoCAD Block Operations", "readOnlyHint": False},
+    structured_output=False,
+)
 @_safe("block")
 async def block(
     operation: str,
@@ -286,7 +317,10 @@ async def block(
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "AutoCAD Annotation Operations", "readOnlyHint": False})
+@mcp.tool(
+    annotations={"title": "AutoCAD Annotation Operations", "readOnlyHint": False},
+    structured_output=False,
+)
 @_safe("annotation")
 async def annotation(
     operation: str,
@@ -340,7 +374,10 @@ async def annotation(
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "P&ID Operations (CTO Library)", "readOnlyHint": False})
+@mcp.tool(
+    annotations={"title": "P&ID Operations (CTO Library)", "readOnlyHint": False},
+    structured_output=False,
+)
 @_safe("pid")
 async def pid(
     operation: str,
@@ -416,7 +453,10 @@ async def pid(
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "AutoCAD View Operations", "readOnlyHint": True})
+@mcp.tool(
+    annotations={"title": "AutoCAD View Operations", "readOnlyHint": True},
+    structured_output=False,
+)
 @_safe("view")
 async def view(
     operation: str,
@@ -471,7 +511,10 @@ async def view(
 # ==========================================================================
 
 
-@mcp.tool(annotations={"title": "AutoCAD MCP System", "readOnlyHint": True})
+@mcp.tool(
+    annotations={"title": "AutoCAD MCP System", "readOnlyHint": True},
+    structured_output=False,
+)
 @_safe("system")
 async def system(
     operation: str,
