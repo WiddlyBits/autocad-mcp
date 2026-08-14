@@ -425,6 +425,41 @@
 ;; Command implementations
 ;; -----------------------------------------------------------------------
 
+(defun mcp-fmt-point (pt)
+  "Format a point list as a JSON [x,y] array, or null."
+  (if pt
+    (strcat "[" (rtos (car pt) 2 6) "," (rtos (cadr pt) 2 6) "]")
+    "null"
+  )
+)
+
+(defun mcp-collect-points (ent-data / out item)
+  "Collect every group-10 point in ent-data as a JSON array body.
+   LWPOLYLINE repeats group 10 once per vertex, so assoc alone finds only the
+   first; this walks the whole list."
+  (setq out "")
+  (foreach item ent-data
+    (if (= (car item) 10)
+      (setq out (if (> (strlen out) 0)
+                  (strcat out "," (mcp-fmt-point (cdr item)))
+                  (mcp-fmt-point (cdr item))))
+    )
+  )
+  out
+)
+
+(defun mcp-drawing-extents ( / emin emax)
+  "Drawing extents as JSON numbers, or null when the drawing is empty.
+   AutoCAD carries +-1e20 sentinels rather than real extents until something
+   is drawn, so those are reported as null instead of as absurd coordinates."
+  (setq emin (getvar "EXTMIN"))
+  (setq emax (getvar "EXTMAX"))
+  (if (or (null emin) (null emax) (> (abs (car emin)) 1e19) (> (abs (car emax)) 1e19))
+    "null"
+    (strcat "{\"min\":" (mcp-fmt-point emin) ",\"max\":" (mcp-fmt-point emax) "}")
+  )
+)
+
 (defun mcp-cmd-drawing-info ( / count layers layer-list)
   "Return drawing info: entity count, layers, extents."
   (setq count 0)
@@ -442,7 +477,9 @@
     )
     (setq layers (tblnext "LAYER"))
   )
-  (cons T (strcat "{\"entity_count\":" (itoa count) ",\"layers\":[" layer-list "]}"))
+  (cons T (strcat "{\"entity_count\":" (itoa count)
+                  ",\"layers\":[" layer-list "]"
+                  ",\"extents\":" (mcp-drawing-extents) "}"))
 )
 
 (defun mcp-cmd-layer-list ( / layers layer-list name)
@@ -855,16 +892,54 @@
       (setq handle (cdr (assoc 5 ent-data)))
       (setq elayer (cdr (assoc 8 ent-data)))
       (setq result (strcat "{\"type\":\"" etype "\",\"handle\":\"" handle "\",\"layer\":\"" elayer "\""))
-      ;; Add type-specific info
+      ;; Type-specific geometry. Everything here is read straight out of the
+      ;; DXF group codes -- no ActiveX, since object calls are what hang the
+      ;; dispatcher on LT. Without these fields, "where is this thing" has no
+      ;; cheap answer and the only way to find out is to look at a screenshot.
       (cond
         ((= etype "LINE")
          (setq result (strcat result
-           ",\"start\":[" (rtos (car (cdr (assoc 10 ent-data))) 2 6) "," (rtos (cadr (cdr (assoc 10 ent-data))) 2 6) "]"
-           ",\"end\":[" (rtos (car (cdr (assoc 11 ent-data))) 2 6) "," (rtos (cadr (cdr (assoc 11 ent-data))) 2 6) "]")))
+           ",\"start\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"end\":" (mcp-fmt-point (cdr (assoc 11 ent-data))))))
         ((= etype "CIRCLE")
          (setq result (strcat result
-           ",\"center\":[" (rtos (car (cdr (assoc 10 ent-data))) 2 6) "," (rtos (cadr (cdr (assoc 10 ent-data))) 2 6) "]"
+           ",\"center\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
            ",\"radius\":" (rtos (cdr (assoc 40 ent-data)) 2 6))))
+        ((= etype "ARC")
+         (setq result (strcat result
+           ",\"center\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"radius\":" (rtos (cdr (assoc 40 ent-data)) 2 6)
+           ",\"start_angle\":" (rtos (cdr (assoc 50 ent-data)) 2 6)
+           ",\"end_angle\":" (rtos (cdr (assoc 51 ent-data)) 2 6))))
+        ((= etype "ELLIPSE")
+         (setq result (strcat result
+           ",\"center\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"major_axis\":" (mcp-fmt-point (cdr (assoc 11 ent-data)))
+           ",\"ratio\":" (rtos (cdr (assoc 40 ent-data)) 2 6))))
+        ((= etype "POINT")
+         (setq result (strcat result
+           ",\"location\":" (mcp-fmt-point (cdr (assoc 10 ent-data))))))
+        ((= etype "LWPOLYLINE")
+         (setq result (strcat result
+           ",\"vertices\":[" (mcp-collect-points ent-data) "]"
+           ",\"closed\":" (if (= 1 (logand 1 (cond ((cdr (assoc 70 ent-data))) (0)))) "true" "false"))))
+        ((member etype (list "TEXT" "ATTDEF"))
+         (setq result (strcat result
+           ",\"text\":\"" (mcp-escape-string (cond ((cdr (assoc 1 ent-data))) (""))) "\""
+           ",\"insert\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"height\":" (rtos (cond ((cdr (assoc 40 ent-data))) (0.0)) 2 6))))
+        ((= etype "MTEXT")
+         (setq result (strcat result
+           ",\"text\":\"" (mcp-escape-string (cond ((cdr (assoc 1 ent-data))) (""))) "\""
+           ",\"insert\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"height\":" (rtos (cond ((cdr (assoc 40 ent-data))) (0.0)) 2 6))))
+        ((= etype "INSERT")
+         (setq result (strcat result
+           ",\"name\":\"" (mcp-escape-string (cdr (assoc 2 ent-data))) "\""
+           ",\"insert\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"xscale\":" (rtos (cond ((cdr (assoc 41 ent-data))) (1.0)) 2 6)
+           ",\"yscale\":" (rtos (cond ((cdr (assoc 42 ent-data))) (1.0)) 2 6)
+           ",\"rotation\":" (rtos (cond ((cdr (assoc 50 ent-data))) (0.0)) 2 6))))
       )
       (setq result (strcat result "}"))
       (cons T result)

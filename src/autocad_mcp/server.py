@@ -66,7 +66,10 @@ async def drawing(
     Operations:
       create     — Create a new empty drawing. data: {name?}
       open       — Open an existing drawing. data: {path}
-      info       — Get drawing extents, entity count, layers, blocks.
+      info       — entity_count, layers, and extents {min:[x,y], max:[x,y]}
+                    (null when the drawing is empty). The cheapest way to
+                    confirm which document you are in and whether an edit
+                    landed — prefer it over a screenshot for both.
       save       — Save current drawing. data: {path?} (saves to path if given, else QSAVE)
       save_as_dxf — Export as DXF. data: {path}
       plot_pdf   — Plot to PDF. data: {path}

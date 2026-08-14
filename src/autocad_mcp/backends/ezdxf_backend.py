@@ -83,9 +83,28 @@ class EzdxfBackend(AutoCADBackend):
             "entity_count": entity_count,
             "layers": layers,
             "blocks": blocks,
+            "extents": self._extents(),
             "dxf_version": self._doc.dxfversion,
             "save_path": self._save_path,
         })
+
+    def _extents(self) -> dict | None:
+        """Drawing extents as numbers, or None if the drawing has no content.
+
+        Cheap enough to include unconditionally, and it turns "where is
+        everything" into a text answer instead of a screenshot.
+        """
+        emin = self._doc.header.get("$EXTMIN")
+        emax = self._doc.header.get("$EXTMAX")
+        if emin is None or emax is None:
+            return None
+        # An empty drawing carries +-1e20 sentinels rather than real extents.
+        if abs(emin[0]) > 1e19 or abs(emax[0]) > 1e19:
+            return None
+        return {
+            "min": [float(c) for c in list(emin)[:2]],
+            "max": [float(c) for c in list(emax)[:2]],
+        }
 
     async def drawing_save(self, path: str | None = None) -> CommandResult:
         if not self._doc:
@@ -206,16 +225,95 @@ class EzdxfBackend(AutoCADBackend):
             if e is None:
                 return CommandResult(ok=False, error=f"Entity {entity_id} not found")
             info = {"type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.get("layer", "0")}
-            # Add type-specific info
-            if e.dxftype() == "LINE":
-                info["start"] = list(e.dxf.start)[:2]
-                info["end"] = list(e.dxf.end)[:2]
-            elif e.dxftype() == "CIRCLE":
-                info["center"] = list(e.dxf.center)[:2]
-                info["radius"] = e.dxf.radius
+            info.update(self._entity_geometry(e))
             return CommandResult(ok=True, payload=info)
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
+
+    @staticmethod
+    def _entity_geometry(e) -> dict:
+        """Positional data for an entity, by type.
+
+        Without this, entity(get) reported type/handle/layer for everything but
+        LINE and CIRCLE — so "where is this thing" had no cheap answer and the
+        only way to find out was to look at a screenshot. Every field here comes
+        straight from DXF attributes; nothing is computed or approximated.
+
+        Coordinates are coerced to plain floats. ezdxf hands back numpy scalars,
+        which json.dumps refuses to serialise — an uncoerced vertex list makes
+        the whole tool call fail at encode time.
+        """
+        kind = e.dxftype()
+        d = e.dxf
+
+        def pt(value) -> list[float]:
+            return [float(c) for c in list(value)[:2]]
+
+        def num(value, default=0.0) -> float:
+            return float(default if value is None else value)
+
+        if kind == "LINE":
+            return {"start": pt(d.start), "end": pt(d.end)}
+
+        if kind == "CIRCLE":
+            return {"center": pt(d.center), "radius": num(d.radius)}
+
+        if kind == "ARC":
+            return {
+                "center": pt(d.center),
+                "radius": num(d.radius),
+                "start_angle": num(d.start_angle),
+                "end_angle": num(d.end_angle),
+            }
+
+        if kind == "ELLIPSE":
+            return {
+                "center": pt(d.center),
+                "major_axis": pt(d.major_axis),
+                "ratio": num(d.ratio),
+            }
+
+        if kind == "LWPOLYLINE":
+            return {
+                "vertices": [pt(p) for p in e.get_points("xy")],
+                "closed": bool(e.closed),
+            }
+
+        if kind == "POLYLINE":
+            return {
+                "vertices": [pt(v.dxf.location) for v in e.vertices],
+                "closed": bool(e.is_closed),
+            }
+
+        if kind in ("TEXT", "ATTDEF"):
+            return {
+                "text": d.text,
+                "insert": pt(d.insert),
+                "height": num(d.height),
+                "rotation": num(d.get("rotation", 0.0)),
+            }
+
+        if kind == "MTEXT":
+            return {
+                "text": e.text,
+                "insert": pt(d.insert),
+                "height": num(d.char_height),
+                "rotation": num(d.get("rotation", 0.0)),
+            }
+
+        if kind == "INSERT":
+            return {
+                "name": d.name,
+                "insert": pt(d.insert),
+                "xscale": num(d.get("xscale", 1.0), 1.0),
+                "yscale": num(d.get("yscale", 1.0), 1.0),
+                "rotation": num(d.get("rotation", 0.0)),
+            }
+
+        if kind == "POINT":
+            return {"location": pt(d.location)}
+
+        return {}
 
     async def entity_erase(self, entity_id) -> CommandResult:
         try:
