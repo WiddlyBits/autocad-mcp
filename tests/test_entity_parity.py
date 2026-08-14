@@ -175,3 +175,13 @@ class TestErasedHandleIsNotFound:
             _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), defun)
         )
         assert "(and ent (entget ent))" in body
+
+
+class TestLispDoesNotDivergeFromTheProbes:
+    """mcp_dispatch.lsp and mcp_probes.lsp both read text and angles out of
+    entget, and probes.py consumes entity(get)'s output. All three have to
+    agree about units, or a bbox lands 57 degrees off."""
+
+    def test_probes_also_treat_group_50_as_radians(self):
+        probes = (DISPATCH_LSP.parent / "mcp_probes.lsp").read_text(encoding="utf-8")
+        assert "(/ (* 180.0 (mcp:group data 50 0.0)) pi)" in probes
