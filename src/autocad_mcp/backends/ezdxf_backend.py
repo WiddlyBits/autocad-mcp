@@ -731,9 +731,17 @@ class EzdxfBackend(AutoCADBackend):
     # --- View ---
 
     async def get_screenshot(
-        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+        self,
+        max_dimension: int | None = SCREENSHOT_MAX_DIMENSION,
+        quality: int | None = None,
+        region: tuple[int, int, int, int] | None = None,
     ) -> CommandResult:
-        data = self._screenshot.capture(max_dimension=max_dimension, quality=quality)
+        try:
+            data = self._screenshot.capture(
+                max_dimension=max_dimension, quality=quality, region=region
+            )
+        except ValueError as e:
+            return CommandResult(ok=False, error=str(e))
         if data:
             return CommandResult(ok=True, payload=data)
         return CommandResult(ok=False, error="Screenshot render failed")

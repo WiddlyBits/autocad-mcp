@@ -15,7 +15,8 @@ from autocad_mcp.client import (
     add_screenshot_if_available,
     get_backend,
 )
-from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION
+from autocad_mcp import config
+from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION, SCREENSHOT_MAX_DIMENSION_RANGE
 
 # FastMCP validates return types via Pydantic. Tools that may return
 # ImageContent (screenshot) alongside TextContent need a union return type.
@@ -466,21 +467,44 @@ async def view(
     y2: float | None = None,
     max_dimension: int | None = SCREENSHOT_MAX_DIMENSION,
     quality: int | None = None,
+    region: list[int] | None = None,
+    save_to: str | None = None,
 ) -> ToolResult:
     """Viewport control and screenshot capture.
 
     Operations:
       zoom_extents   — Zoom to show all entities.
       zoom_window    — Zoom to window: x1, y1, x2, y2
-      get_screenshot — Capture current view as an image. Downscaled to
-                        max_dimension px on the longest side by default (pass
-                        None for full resolution). max_dimension is the lever
-                        that controls token cost: images bill as
-                        ceil(w/28) * ceil(h/28) visual tokens, so halving the
-                        cap roughly quarters the cost. Raise it when you need to
-                        read small dimension text; lower it for layout checks.
-                        quality (1-95) encodes JPEG instead of PNG — that shrinks
-                        the transferred payload but does not reduce token cost.
+      get_screenshot — Capture current view as an image.
+
+    Screenshots are the most expensive thing this server can return, and the cost
+    is not paid once: an image that enters context is re-read on every subsequent
+    request. Prefer a cheap text query when one can answer the question. When you
+    do need pixels, these three parameters are the levers, in order of effect:
+
+      region [left, top, right, bottom]
+                     — Crop to a pixel rect of the captured window, applied
+                        BEFORE downscaling, so the crop keeps full source
+                        resolution. This is the biggest lever: a 500x400 crop
+                        costs ~270 tokens and stays sharp, where the whole
+                        1928x1218 window costs ~1,334 even downscaled to 1280 —
+                        and that downscale is what made its small text
+                        unreadable. Use it for any detail check.
+      save_to        — Write the PNG to this path and return only its path and
+                        cost, with NO image attached. Nothing enters context, so
+                        you can drop checkpoints during a long edit and spend
+                        tokens reading back only the one that turns out to
+                        matter.
+      max_dimension  — Caps the longest side (clamped to 64-2576; None = full
+                        resolution). Images bill as ceil(w/28) * ceil(h/28)
+                        visual tokens, so halving the cap roughly quarters the
+                        cost. Raise it to read small dimension text; lower it for
+                        layout checks.
+
+    quality (1-95) encodes JPEG instead of PNG. It shrinks the transferred
+    payload but does NOT reduce token cost, which depends on dimensions alone.
+
+    Every successful capture reports est_tokens — what looking at it costs.
     """
     backend = await get_backend()
 
@@ -491,17 +515,58 @@ async def view(
         result = await backend.zoom_window(x1, y1, x2, y2)
         return _json(result.to_dict())
     elif operation == "get_screenshot":
-        result = await backend.get_screenshot(max_dimension=max_dimension, quality=quality)
-        if result.ok and result.payload:
-            from mcp.types import ImageContent, TextContent
+        if region is not None:
+            if len(region) != 4 or not all(isinstance(v, int) for v in region):
+                return _json(
+                    {"error": "region must be 4 integers: [left, top, right, bottom]"}
+                )
+            region = tuple(region)
 
-            return [
-                TextContent(type="text", text=_json({"ok": True, "screenshot": "attached"})),
-                ImageContent(
-                    type="image", data=result.payload["data"], mimeType=result.payload["mime"]
-                ),
-            ]
-        return _json(result.to_dict())
+        if max_dimension is not None:
+            low, high = SCREENSHOT_MAX_DIMENSION_RANGE
+            max_dimension = max(low, min(high, max_dimension))
+
+        result = await backend.get_screenshot(
+            max_dimension=max_dimension, quality=quality, region=region
+        )
+        if not (result.ok and result.payload):
+            return _json(result.to_dict())
+
+        meta = {
+            "ok": True,
+            "width": result.payload["width"],
+            "height": result.payload["height"],
+            "est_tokens": result.payload["est_tokens"],
+        }
+
+        if save_to:
+            import base64
+            from pathlib import Path
+
+            path = Path(save_to).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(base64.b64decode(result.payload["data"]))
+            return _json({**meta, "path": str(path), "screenshot": "saved"})
+
+        # A true no-image mode: report what the capture would have cost without
+        # spending it. This is what makes an image-free control arm possible.
+        if config.ONLY_TEXT_FEEDBACK:
+            return _json(
+                {
+                    **meta,
+                    "screenshot": "suppressed",
+                    "reason": "AUTOCAD_MCP_ONLY_TEXT is set",
+                }
+            )
+
+        from mcp.types import ImageContent, TextContent
+
+        return [
+            TextContent(type="text", text=_json({**meta, "screenshot": "attached"})),
+            ImageContent(
+                type="image", data=result.payload["data"], mimeType=result.payload["mime"]
+            ),
+        ]
     else:
         return _json({"error": f"Unknown view operation: {operation}"})
 

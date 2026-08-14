@@ -49,7 +49,14 @@ ONLY_TEXT_FEEDBACK = os.environ.get("AUTOCAD_MCP_ONLY_TEXT", "").lower() in ("1"
 # The upper clamp is 2576 because the vision API downscales anything longer than
 # that (and caps a single image at 4784 visual tokens) before the model sees it —
 # pixels beyond that ceiling are transmitted and then discarded.
-SCREENSHOT_MAX_DIMENSION = _env_int("AUTOCAD_MCP_SCREENSHOT_MAX_DIM", 1280, 64, 2576)
+#
+# The same bounds apply to a max_dimension passed as a tool argument, not just to
+# this env default — an unclamped argument would let a single call ask for a
+# resolution the vision API is going to throw away anyway.
+SCREENSHOT_MAX_DIMENSION_RANGE = (64, 2576)
+SCREENSHOT_MAX_DIMENSION = _env_int(
+    "AUTOCAD_MCP_SCREENSHOT_MAX_DIM", 1280, *SCREENSHOT_MAX_DIMENSION_RANGE
+)
 
 # Win32 availability
 WIN32_AVAILABLE = sys.platform == "win32"
