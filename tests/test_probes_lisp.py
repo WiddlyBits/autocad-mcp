@@ -11,6 +11,7 @@ that silently stops responding, and a session that spends ten seconds per call
 discovering it.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -25,17 +26,27 @@ from autocad_mcp.probes import (
 
 LISP_DIR = Path(__file__).parent.parent / "lisp-code"
 PROBES_LSP = LISP_DIR / "mcp_probes.lsp"
+DISPATCH_LSP = LISP_DIR / "mcp_dispatch.lsp"
 
-#: The probes the capture ladder's L2 and L3 rungs name, plus the rest of the set.
-PUBLIC_PROBES = [
-    "mcp:extents",
-    "mcp:bbox-of",
-    "mcp:bbox-by-layer",
-    "mcp:text-dump",
-    "mcp:overlap",
-    "mcp:grid-map",
-    "mcp:snapshot",
-]
+#: The probes the capture ladder's L2 and L3 rungs name, plus the rest of the
+#: set, each mapped to the defun that actually does the work.
+#:
+#: They differ because AutoLISP has no optional arguments: a probe that gained
+#: a space parameter keeps its original zero-argument name as a wrapper meaning
+#: model space, so that every call already written — and the ladder in the
+#: skill — still works. The assertions below have to look inside the
+#: implementation, not the wrapper.
+PROBE_IMPL = {
+    "mcp:extents": "mcp:extents-in",
+    "mcp:bbox-of": "mcp:bbox-of",  # handles are document-wide; no space needed
+    "mcp:bbox-by-layer": "mcp:bbox-by-layer-in",
+    "mcp:text-dump": "mcp:text-dump-in",
+    "mcp:overlap": "mcp:overlap-in",
+    "mcp:grid-map": "mcp:grid-map-in",
+    "mcp:snapshot": "mcp:snapshot-in",
+}
+
+PUBLIC_PROBES = list(PROBE_IMPL)
 
 
 def source(path: Path) -> str:
@@ -118,6 +129,41 @@ class TestParseable:
         assert "\t" not in source(LISP_DIR / name)
 
 
+class TestEveryCallResolves:
+    """A misspelled function name is not a load error in AutoLISP.
+
+    The file loads, the banner prints, and the mistake surfaces only when a
+    caller reaches that branch — as "no function definition", one 10 s IPC
+    round trip later, possibly on the drawing that mattered. Same class of
+    failure as the unbalanced paren above, and equally checkable offline.
+    """
+
+    @pytest.mark.parametrize("name", ["mcp_probes.lsp", "mcp_dispatch.lsp"])
+    def test_no_call_to_an_undefined_mcp_function(self, name):
+        text = source(LISP_DIR / name)
+        code = strip_lisp(text)
+        defined = set(re.findall(r"\(defun ([\w:-]+) ", code))
+        if name == "mcp_probes.lsp":
+            # mcp_probes.lsp is loaded alongside the dispatcher, but is written
+            # to work without it — see the local mcp:esc.
+            defined |= set(re.findall(r"\(defun ([\w:-]+) ", strip_lisp(source(DISPATCH_LSP))))
+        else:
+            defined |= set(re.findall(r"\(defun ([\w:-]+) ", strip_lisp(source(PROBES_LSP))))
+            defined |= set(re.findall(r"\(defun ([\w:-]+) ", strip_lisp(source(LISP_DIR / "attribute_tools.lsp"))))
+        called = set(re.findall(r"\((mcp[:-][\w:-]+)", code))
+        assert called - defined == set(), (
+            f"{name} calls functions nothing defines: {sorted(called - defined)}"
+        )
+
+    @pytest.mark.parametrize("name", ["mcp_probes.lsp", "mcp_dispatch.lsp"])
+    def test_no_function_is_defined_twice(self, name):
+        """The second definition wins silently, and which one that is depends
+        on load order."""
+        names = re.findall(r"\(defun ([\w:-]+) ", strip_lisp(source(LISP_DIR / name)))
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        assert dupes == [], f"{name} defines these more than once: {dupes}"
+
+
 class TestProbesArePresent:
     @pytest.mark.parametrize("probe", PUBLIC_PROBES)
     def test_defined(self, probe):
@@ -181,11 +227,27 @@ class TestBudgetIsWiredIn:
     loop that can run the length of the drawing has to be bounded."""
 
     @pytest.mark.parametrize(
-        "func", ["mcp:extents", "mcp:bbox-by-layer", "mcp:snapshot", "mcp:computed-extents"]
+        "func",
+        [
+            "mcp:extents-in",
+            "mcp:bbox-by-layer-in",
+            "mcp:snapshot-in",
+            "mcp:computed-extents-in",
+            "mcp:space-boxes",
+        ],
     )
     def test_iterating_probes_charge_the_budget(self, func):
         body = _defun_body(source(PROBES_LSP), func)
         assert "mcp:budget-entity" in body, f"{func} scans without a ceiling"
+
+    def test_the_raster_is_bounded_by_the_clock_not_the_entity_count(self):
+        """Its boxes were charged when mcp:space-boxes collected them.
+        Charging them again would halve the effective ceiling — but the loop
+        still has to stop, because a drawing where every entity spans the whole
+        grid is cells-touched x entities and unbounded otherwise."""
+        body = _defun_body(source(PROBES_LSP), "mcp:grid-raster")
+        assert "mcp:raster-expired" in body
+        assert "mcp:budget-entity" not in body
 
     def test_grid_map_charges_probes_not_entities(self):
         body = _defun_body(source(PROBES_LSP), "mcp:grid-rows")
@@ -210,8 +272,132 @@ class TestBudgetIsWiredIn:
         """As the Python reference does. Carrying the entity count over from
         the layer scan would make the text dump truncate immediately on any
         drawing large enough for the ceiling to matter."""
-        body = _defun_body(source(PROBES_LSP), "mcp:snapshot")
+        body = _defun_body(source(PROBES_LSP), "mcp:snapshot-in")
         assert body.count("(mcp:budget-init") >= 3
+
+    def test_grid_map_restarts_the_budget_after_computing_the_region(self):
+        """The first half of the Draft 3 failure. Computing the region over
+        29,717 entities spent the whole 20,000-entity ceiling, so the grid ran
+        with nothing left and came back entirely '?' at probes: 0. Honest, and
+        an answer to no question."""
+        body = _defun_body(source(PROBES_LSP), "mcp:grid-map-in")
+        assert body.count("(mcp:budget-init") >= 2
+
+
+class TestSpaceIsExplicit:
+    """The Draft 3 defect. Every probe hardcoded `(410 . "Model")` and
+    mcp:cell-occupied used `ssget "_C"`, which is SPACE-dependent rather than
+    view-dependent: measured from Layout1 with CVPORT 1, a crossing window over
+    paper coordinates and one over model coordinates both returned the same 24
+    paper-space entities, and model space was unreachable at any zoom. The grid
+    came back solid '.' — asserting confirmed-empty — against 29,717 entities.
+    """
+
+    @pytest.mark.parametrize(
+        "func",
+        [
+            "mcp:extents-in",
+            "mcp:bbox-by-layer-in",
+            "mcp:text-items",
+            "mcp:layer-bbox",
+            "mcp:computed-extents-in",
+            "mcp:space-boxes",
+            "mcp:cell-occupied",
+        ],
+    )
+    def test_no_probe_hardcodes_model_space(self, func):
+        body = _defun_body(source(PROBES_LSP), func)
+        assert '410 . "Model"' not in body, (
+            f"{func} still hardcodes model space, so it answers a question "
+            f"other than the one it was asked on a composed sheet"
+        )
+
+    @pytest.mark.parametrize("public,impl", sorted(PROBE_IMPL.items()))
+    def test_the_zero_argument_form_still_exists(self, public, impl):
+        """AutoLISP has no optional arguments: calling a one-argument defun
+        with none is 'too few arguments', discovered one 10 s IPC round trip
+        at a time. Every documented call has to keep working."""
+        assert f"(defun {public} " in source(PROBES_LSP)
+        assert f"(defun {impl} " in source(PROBES_LSP)
+
+    def test_grid_map_picks_its_mode_from_the_current_space(self):
+        """ssget "_C" cannot reach a space that is not current, so a grid of
+        model space taken from a layout tab has to fall back to the raster."""
+        body = _defun_body(source(PROBES_LSP), "mcp:grid-map-in")
+        assert "mcp:current-space" in body
+        assert "mcp:grid-rows" in body and "mcp:grid-raster" in body
+
+    def test_the_grid_says_which_mode_produced_it(self):
+        """A bbox grid fills a hollow border and a crossing grid does not.
+        Reading one as the other is a wrong conclusion, not a rounding error."""
+        assert '\\"mode\\":\\"' in _defun_body(source(PROBES_LSP), "mcp:grid-map-in")
+        # The snapshot carries it on the grid line, since .snap is not JSON.
+        assert '"grid "' in _defun_body(source(PROBES_LSP), "mcp:snapshot-in")
+        assert 'mode " "' in _defun_body(source(PROBES_LSP), "mcp:snapshot-in")
+
+    def test_current_space_accounts_for_a_floating_viewport(self):
+        """In a layout, CVPORT 1 means paper space is current; anything else
+        means the cursor is inside a viewport and model space is."""
+        body = _defun_body(source(PROBES_LSP), "mcp:current-space")
+        assert '"TILEMODE"' in body and '"CVPORT"' in body and '"CTAB"' in body
+
+    def test_raster_leaves_unscanned_cells_unknown(self):
+        """Same rule as the crossing grid: a truncated scan has established no
+        '.' at all, only the '#' it actually found."""
+        body = _defun_body(source(PROBES_LSP), "mcp:grid-raster")
+        assert '"?"' in body
+
+    def test_the_drawing_is_read_once_per_grid(self):
+        """Raster mode needs the region and every box. Measuring them in two
+        passes is two entget scans over 29,717 entities inside a 7 s budget,
+        and the second is the one that runs out."""
+        body = _defun_body(source(PROBES_LSP), "mcp:grid-map-in")
+        assert "mcp:space-boxes" in body and "mcp:bb-union-all" in body
+        # Crossing mode gets extents the cheap way; raster mode must not also
+        # call it, or the saving is given straight back.
+        assert body.count("mcp:computed-extents-in") == 1
+
+    def test_a_truncated_raster_still_reports_unknown_cells(self):
+        """budget-init clears the truncation reason, and mcp:grid-raster reads
+        exactly that to decide between '.' and '?'. Resetting it before the
+        raster would make a partial scan assert an empty sheet — the original
+        defect, reintroduced one layer down."""
+        for func in ("mcp:grid-map-in", "mcp:snapshot-in"):
+            body = _defun_body(source(PROBES_LSP), func)
+            assert '(if (= mode "crossing") (mcp:budget-init' in body, (
+                f"{func} restarts the budget unconditionally before the grid"
+            )
+
+    def test_raster_bitmask_cannot_overflow(self):
+        """A row is packed into one integer and AutoLISP's lsh is 32-bit
+        signed. Past 30 columns the mask goes negative and cells read empty —
+        the exact failure this whole class exists to prevent."""
+        body = _defun_body(source(PROBES_LSP), "mcp:grid-map-in")
+        assert "(> cols 30)" in body
+
+
+class TestOverlapRefusesRatherThanGuesses:
+    """mcp:overlap answered 'no overlap' on Draft 3 because `border line 02` is
+    entirely in Layout1 and mcp:layer-bbox was model-only. It was a false
+    negative shaped exactly like a pass."""
+
+    def test_overlaps_is_null_when_the_comparison_did_not_happen(self):
+        body = _defun_body(source(PROBES_LSP), "mcp:overlap-in")
+        assert '\\"overlaps\\":null' in body
+        assert '\\"comparable\\":false' in body
+
+    def test_it_checks_which_spaces_the_layers_occupy(self):
+        """Two layers in different spaces have coordinates related by a
+        viewport transform this code does not have. Unioning them produces a
+        number that means nothing."""
+        body = _defun_body(source(PROBES_LSP), "mcp:overlap-in")
+        assert "mcp:layer-spaces" in body
+
+    def test_layout_tabs_come_from_the_dictionary_not_an_entity_scan(self):
+        """Scanning 30k entities for distinct 410 values is most of the time
+        budget spent on a list of three strings."""
+        body = _defun_body(source(PROBES_LSP), "mcp:layout-tabs")
+        assert "namedobjdict" in body and "ACAD_LAYOUT" in body
 
 
 class TestLispSortDoesNotDropRows:
@@ -233,19 +419,20 @@ class TestSnapshotFormatMatches:
 
     @pytest.mark.parametrize(
         "literal",
-        ['"# mcp-snapshot v"', '"entities "', '" approx "', '" unmeasured "',
-         '" truncated "', '"hidden-layers "', '"extents-header "',
-         '"extents-computed "', '"layer "', '" count "', '" bbox "', '" exact "',
-         '"text "', '" h "', '"grid "', '"grid | "', '"grid none"'],
+        ['"# mcp-snapshot v"', '"space "', '"entities "', '" approx "',
+         '" unmeasured "', '" truncated "', '"hidden-layers "',
+         '"extents-header "', '"extents-computed "', '"layer "', '" count "',
+         '" bbox "', '" exact "', '"text "', '" h "', '"grid "', '"grid | "',
+         '"grid none"'],
     )
     def test_emits_the_field(self, literal):
-        body = _defun_body(source(PROBES_LSP), "mcp:snapshot")
+        body = _defun_body(source(PROBES_LSP), "mcp:snapshot-in")
         assert literal in body, f"mcp:snapshot never writes {literal}"
 
     def test_writes_atomically(self):
         """mcp_dispatch.lsp writes results through a .tmp and a rename; a
         half-written .snap read by a diff is a false regression."""
-        body = _defun_body(source(PROBES_LSP), "mcp:snapshot")
+        body = _defun_body(source(PROBES_LSP), "mcp:snapshot-in")
         assert "vl-file-rename" in body
 
     def test_pins_dimzin_around_output(self):
@@ -253,14 +440,14 @@ class TestSnapshotFormatMatches:
         snapshot format depends on a drawing setting rather than on the
         drawing."""
         assert '(setvar "DIMZIN" 0)' in source(PROBES_LSP)
-        for probe in PUBLIC_PROBES:
-            body = _defun_body(source(PROBES_LSP), probe)
-            assert "mcp:begin-output" in body, f"{probe} does not pin DIMZIN"
+        for impl in PROBE_IMPL.values():
+            body = _defun_body(source(PROBES_LSP), impl)
+            assert "mcp:begin-output" in body, f"{impl} does not pin DIMZIN"
 
     def test_snapshot_writes_to_a_file_rather_than_the_ipc_payload(self):
         """Returning the snapshot through execute_lisp would cost exactly what
         it exists to save."""
-        body = _defun_body(source(PROBES_LSP), "mcp:snapshot")
+        body = _defun_body(source(PROBES_LSP), "mcp:snapshot-in")
         assert "(open tmp \"w\")" in body
 
 

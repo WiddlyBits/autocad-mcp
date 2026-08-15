@@ -17,6 +17,7 @@ from pathlib import Path
 import ezdxf
 import pytest
 
+from autocad_mcp import probe_dxf
 from autocad_mcp.probe_dxf import snapshot_doc, snapshot_file
 from tests.generate_golden import (
     GOLDEN_DIR,
@@ -241,6 +242,72 @@ class TestSnapshotContent:
         """A truncated snapshot that does not say so would compare partial
         data against a full fixture and call it a match."""
         assert "truncated no" in snap
+
+
+class TestSpacesAreSeparate:
+    """Draft 3 is a paper-space-composed sheet: 29,717 entities in model space,
+    26 in Layout1, the border and title block entirely in the latter and the
+    diagram entirely in the former. Every probe used to mean model space
+    without saying so, which is how mcp:overlap came to report "no overlap"
+    between two things it had never both seen.
+    """
+
+    @pytest.fixture
+    def composed(self):
+        """A miniature of that arrangement: a border on the sheet, a diagram in
+        the model, no layer shared between them."""
+        doc = ezdxf.new(setup=True)
+        doc.modelspace().add_lwpolyline(
+            [(0, 0), (44, 0), (44, 56), (0, 56)], close=True,
+            dxfattribs={"layer": "DIAGRAM"},
+        )
+        layout = doc.layout("Layout1")
+        layout.add_lwpolyline(
+            [(0, 0), (36, 0), (36, 24), (0, 24)], close=True,
+            dxfattribs={"layer": "BORDER"},
+        )
+        return doc
+
+    def test_spaces_lists_model_first_then_the_tabs(self, composed):
+        assert probe_dxf.spaces(composed)[0] == "Model"
+        assert "Layout1" in probe_dxf.spaces(composed)
+
+    def test_each_space_holds_only_its_own_entities(self, composed):
+        model, _ = probe_dxf.collect(composed, "Model")
+        sheet, _ = probe_dxf.collect(composed, "Layout1")
+        assert [e["layer"] for e in model] == ["DIAGRAM"]
+        assert [e["layer"] for e in sheet] == ["BORDER"]
+
+    def test_a_layer_reports_the_spaces_it_is_actually_in(self, composed):
+        """The check that stops mcp:overlap from comparing two boxes measured
+        in different coordinate systems."""
+        assert probe_dxf.layer_spaces(composed, "BORDER") == ["Layout1"]
+        assert probe_dxf.layer_spaces(composed, "DIAGRAM") == ["Model"]
+
+    def test_the_two_never_share_a_space(self, composed):
+        a = set(probe_dxf.layer_spaces(composed, "BORDER"))
+        b = set(probe_dxf.layer_spaces(composed, "DIAGRAM"))
+        assert a & b == set(), "the whole premise of the not-comparable branch"
+
+    def test_an_unknown_space_is_an_error_not_a_silent_modelspace(self, composed):
+        """Falling back to model space is exactly the failure being fixed."""
+        with pytest.raises(KeyError):
+            probe_dxf.collect(composed, "Layout9")
+
+    def test_the_snapshot_names_its_space(self, composed):
+        model = probe_dxf.snapshot_doc(composed, space="Model")
+        sheet = probe_dxf.snapshot_doc(composed, space="Layout1")
+        assert "space Model" in model
+        assert "space Layout1" in sheet
+        assert model != sheet
+
+    def test_blocks_are_shared_across_spaces(self, composed):
+        """An INSERT in a layout references the same definition as one in model
+        space, so the block map is document-wide, not per-space."""
+        composed.blocks.new(name="UPS").add_line((0, 0), (1, 1))
+        _, model_blocks = probe_dxf.collect(composed, "Model")
+        _, sheet_blocks = probe_dxf.collect(composed, "Layout1")
+        assert "UPS" in model_blocks and "UPS" in sheet_blocks
 
 
 def test_probes_module_and_lisp_port_are_kept_together():

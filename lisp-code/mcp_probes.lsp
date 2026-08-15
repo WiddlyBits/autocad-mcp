@@ -7,6 +7,23 @@
 ;;;   execute_lisp "(mcp:overlap \"BORDER\" \"DIAGRAM\" 2.0)"
 ;;;   execute_lisp "(mcp:snapshot \"C:/temp/draft3.snap\")"
 ;;;
+;;; Every probe that scans the drawing comes in two forms. The bare name means
+;;; model space, which is what all of them silently meant before; the -in form
+;;; takes an explicit space - "Model" or a layout tab name:
+;;;
+;;;   execute_lisp "(mcp:bbox-by-layer-in \"Layout1\")"
+;;;   execute_lisp "(mcp:grid-map-in 24 16 \"Model\")"
+;;;
+;;; AutoLISP has no optional arguments, so this is two names rather than one
+;;; with a default: calling a one-argument defun with none is "too few
+;;; arguments", and finding that out costs a 10 s IPC round trip.
+;;;
+;;; SPACE IS NOT A DETAIL ON A COMPOSED SHEET. Draft 3 holds 29,717 entities in
+;;; model space and 26 in Layout1, with the border and title block entirely in
+;;; the latter and the diagram entirely in the former. A probe that assumes
+;;; model space answers a different question than the one asked, and looks like
+;;; it answered the right one.
+;;;
 ;;; Each returns a JSON string. mcp-cmd-execute-lisp returns the value of the
 ;;; last form in the loaded file, so a bare probe call is the whole payload.
 ;;;
@@ -34,7 +51,10 @@
 ;; Tunables - keep in step with src/autocad_mcp/probes.py
 ;; -----------------------------------------------------------------------
 
-(setq *mcp-snapshot-version* 1)
+;; v2 added the `space` line and the grid's mode. Both exist because v1 could
+;; not say which space it described, and a snapshot of the wrong space is
+;; indistinguishable from a snapshot of a changed drawing.
+(setq *mcp-snapshot-version* 2)
 
 ;; Nominal glyph advance as a fraction of text height. Deliberately a
 ;; constant: AutoLISP cannot measure a glyph without ActiveX, so anything
@@ -464,12 +484,59 @@
 ;; Model-space iteration
 ;; -----------------------------------------------------------------------
 
-(defun mcp:model-ss ( )
-  "Every model-space entity, or nil. Paper space is excluded deliberately -
-   mixing a title block's layout geometry into the model extents makes the
-   numbers meaningless."
-  (ssget "_X" '((410 . "Model")))
+;; A "space" here is the string DXF group 410 carries: "Model", or a layout's
+;; tab name. It is the same vocabulary probe_dxf.spaces() uses, so a probe
+;; called with "Layout1" means the same thing on both sides.
+
+(defun mcp:space-name (space)
+  "Normalise a space argument. nil defaults to model space, which is what
+   every probe meant before any of them could say so."
+  (cond
+    ((null space) "Model")
+    ((= space "") "Model")
+    (t space)
+  )
 )
+
+(defun mcp:current-space ( / cvport)
+  "The space ssget \"_C\" can actually reach.
+
+   This is the whole of the grid-map defect, in one function. ssget \"_C\" is
+   SPACE-dependent, not view-dependent: measured on Draft 3 with CTAB=Layout1
+   and CVPORT=1, a crossing window over paper coordinates and one over model
+   coordinates both returned the same 24 paper-space entities. Model space was
+   unreachable at any zoom. No save/restore ZOOM _E would have helped, because
+   zoom was never what was wrong.
+
+   TILEMODE 1 is the Model tab. In a layout, CVPORT 1 means paper space is
+   current; anything else means the cursor is inside a floating viewport and
+   model space is current."
+  (if (= 1 (getvar "TILEMODE"))
+    "Model"
+    (progn
+      (setq cvport (getvar "CVPORT"))
+      (if (or (null cvport) (= cvport 1)) (getvar "CTAB") "Model")
+    )
+  )
+)
+
+(defun mcp:space-ss (space / nm)
+  "Every entity in one space, or nil. Space-explicit and view-independent:
+   ssget \"_X\" honours the 410 filter wherever the user happens to be."
+  (setq nm (mcp:space-name space))
+  (ssget "_X" (list (cons 410 nm)))
+)
+
+(defun mcp:space-ss-filtered (space extra / nm)
+  "As mcp:space-ss, with additional ssget filter pairs appended."
+  (setq nm (mcp:space-name space))
+  (ssget "_X" (cons (cons 410 nm) extra))
+)
+
+;; There is deliberately no mcp:model-ss any more. A helper whose name means
+;; "the entities" while its body means "the model-space entities" is how every
+;; probe in this file came to answer a question nobody asked; call mcp:space-ss
+;; with the space written down.
 
 ;; -----------------------------------------------------------------------
 ;; mcp:extents
@@ -484,15 +551,27 @@
   )
 )
 
-(defun mcp:extents ( / ss i n box b out)
+;; AutoLISP has no optional arguments: calling a one-argument defun with none
+;; is "error: too few arguments", and discovering that costs a 10 s IPC round
+;; trip. So every probe that gained a space keeps its original zero-argument
+;; name meaning model space, and the space-taking form is a separate -in name.
+
+(defun mcp:extents ( ) (mcp:extents-in "Model"))
+
+(defun mcp:extents-in (space / ss i n box b out)
   "Computed extents, which is not what EXTMIN reports.
    EXTMIN/EXTMAX only update on a regen or a zoom-extents, so after an erase
    they routinely describe geometry that no longer exists. Reporting both, and
    naming which is which, is the difference between a cheap answer and a
-   confidently wrong one."
+   confidently wrong one.
+
+   Also not what the header reports for a second reason: EXTMIN/EXTMAX describe
+   the CURRENT space. On Draft 3 they read max [40.46, 22.50] - the paper sheet
+   - while model space reaches [44.0, 59.46]. The space is named in the output
+   so the two numbers can be told apart."
   (mcp:begin-output)
   (mcp:budget-init nil nil nil)
-  (setq ss (mcp:model-ss))
+  (setq ss (mcp:space-ss space))
   (setq n (if ss (sslength ss) 0) i 0 box nil)
   (while (and (< i n) (mcp:budget-entity))
     (setq b (mcp:ent-bbox (ssname ss i)))
@@ -501,6 +580,8 @@
   )
   (setq out (strcat "{\"extents\":" (mcp:bb-json box)
                     ",\"extents_header\":" (mcp:bb-json (mcp:header-extents))
+                    ",\"space\":\"" (mcp:esc (mcp:space-name space)) "\""
+                    ",\"current_space\":\"" (mcp:esc (mcp:current-space)) "\""
                     ",\"entities\":" (itoa n)
                     "," (mcp:budget-json) "}"))
   (mcp:end-output)
@@ -541,14 +622,22 @@
 ;; mcp:bbox-by-layer
 ;; -----------------------------------------------------------------------
 
-(defun mcp:bbox-by-layer ( / ss n i data lyr b acc rec out first)
+(defun mcp:bbox-by-layer ( ) (mcp:bbox-by-layer-in "Model"))
+
+(defun mcp:bbox-by-layer-in (space / ss n i data lyr b acc rec out first)
   "What occupies which region, one line per layer - the L2 rung.
    For a panel drawing this is the whole layout in a few hundred tokens:
    every layer's footprint, which answers \"is the schedule still inside the
-   border\" without rendering anything."
+   border\" without rendering anything.
+
+   One space at a time, and it says which. A layer is a document-wide NAME,
+   not a place: on Draft 3, `border line 02` has entities only in Layout1 and
+   `ECSI_Backpan` only in model space, so a single call can never show both -
+   and one that silently showed model space made the border look like it did
+   not exist."
   (mcp:begin-output)
   (mcp:budget-init nil nil nil)
-  (setq ss (mcp:model-ss))
+  (setq ss (mcp:space-ss space))
   (setq n (if ss (sslength ss) 0) i 0 acc '())
   (while (and (< i n) (mcp:budget-entity))
     (setq data (entget (ssname ss i)))
@@ -583,6 +672,7 @@
     (setq first nil)
   )
   (setq out (strcat "{\"layers\":{" out "},\"entities\":" (itoa n)
+                    ",\"space\":\"" (mcp:esc (mcp:space-name space)) "\""
                     "," (mcp:budget-json) "}"))
   (mcp:end-output)
   out
@@ -592,10 +682,10 @@
 ;; mcp:text-dump
 ;; -----------------------------------------------------------------------
 
-(defun mcp:text-items ( / ss n i data kind c items)
-  "Every string in model space with where it sits, sorted top-down then
+(defun mcp:text-items (space / ss n i data kind c items)
+  "Every string in one space with where it sits, sorted top-down then
    left-to-right so the dump reads the way the sheet does."
-  (setq ss (ssget "_X" '((410 . "Model") (0 . "TEXT,MTEXT,ATTDEF"))))
+  (setq ss (mcp:space-ss-filtered space '((0 . "TEXT,MTEXT,ATTDEF"))))
   (setq n (if ss (sslength ss) 0) i 0 items '())
   (while (and (< i n) (mcp:budget-entity))
     (setq data (entget (ssname ss i)))
@@ -625,11 +715,18 @@
        )))
 )
 
-(defun mcp:text-dump ( / items out first it)
-  "Reading a label should never cost a screenshot."
+(defun mcp:text-dump ( ) (mcp:text-dump-in "Model"))
+
+(defun mcp:text-dump-in (space / items out first it)
+  "Reading a label should never cost a screenshot.
+
+   Not a cheap rung, though: measured on Draft 3's 84 labels this cost ~2.5-3K
+   tokens, more than a full-window capture at 1280 (1,334). What it buys is
+   exact strings and coordinates, which pixels cannot give. Pass a layer-heavy
+   space or expect the bill."
   (mcp:begin-output)
   (mcp:budget-init nil nil nil)
-  (setq items (mcp:text-items))
+  (setq items (mcp:text-items space))
   (setq out "" first T)
   (foreach it items
     (setq out (strcat out (if first "" ",")
@@ -641,6 +738,7 @@
     (setq first nil)
   )
   (setq out (strcat "{\"text\":[" out "],\"count\":" (itoa (length items))
+                    ",\"space\":\"" (mcp:esc (mcp:space-name space)) "\""
                     "," (mcp:budget-json) "}"))
   (mcp:end-output)
   out
@@ -650,8 +748,14 @@
 ;; mcp:overlap
 ;; -----------------------------------------------------------------------
 
-(defun mcp:layer-bbox (lyr / ss n i box b)
-  (setq ss (ssget "_X" (list (cons 410 "Model") (cons 8 lyr))))
+(defun mcp:layer-bbox (lyr space / ss n i box b)
+  "One layer's footprint in one space.
+
+   The 410 filter was hardcoded to \"Model\" and that is what made mcp:overlap
+   useless on Draft 3: `border line 02` lives entirely in Layout1, so this
+   returned nil for it and the overlap check answered \"no overlap\" for a
+   reason that had nothing to do with geometry."
+  (setq ss (mcp:space-ss-filtered space (list (cons 8 lyr))))
   (setq n (if ss (sslength ss) 0) i 0 box nil)
   (while (and (< i n) (mcp:budget-entity))
     (setq b (mcp:ent-bbox (ssname ss i)))
@@ -661,55 +765,149 @@
   box
 )
 
-(defun mcp:overlap (layer-a layer-b clearance / a b hit sep out)
+(defun mcp:layer-spaces (lyr / out ss nm)
+  "Which spaces a layer actually has entities in, as a list of names.
+   Cheap - one ssget per space, no entget - and it is what stops mcp:overlap
+   from comparing two boxes measured in different coordinate systems."
+  (setq out '())
+  (foreach nm (mcp:space-names)
+    (setq ss (ssget "_X" (list (cons 410 nm) (cons 8 lyr))))
+    (if (and ss (> (sslength ss) 0)) (setq out (cons nm out)))
+  )
+  (reverse out)
+)
+
+(defun mcp:space-names ( / out tab)
+  "\"Model\" followed by every layout tab name - the same list
+   probe_dxf.spaces() produces, in the same order."
+  (setq out (list "Model"))
+  (foreach tab (mcp:layout-tabs) (if (/= tab "Model") (setq out (cons tab out))))
+  (reverse out)
+)
+
+(defun mcp:layout-tabs ( / dict out item)
+  "Tab names from the ACAD_LAYOUT dictionary: group 3 is the name, 350 the
+   layout object. dictsearch and namedobjdict are plain AutoLISP - no COM -
+   which matters because the obvious route to this list is vla-get-Layouts,
+   and creating a vla- object hangs the dispatcher on LT.
+
+   Reading the dictionary rather than scanning entities for distinct 410
+   values is not a style choice: the scan is 30k entget calls on Draft 3,
+   which is most of the time budget spent on a list of three strings."
+  (setq dict (dictsearch (namedobjdict) "ACAD_LAYOUT"))
+  (setq out '())
+  (foreach item dict (if (= (car item) 3) (setq out (cons (cdr item) out))))
+  (reverse out)
+)
+
+(defun mcp:overlap (layer-a layer-b clearance)
+  (mcp:overlap-in layer-a layer-b clearance nil))
+
+(defun mcp:overlap-in (layer-a layer-b clearance space
+                       / a b hit sep out sa sb shared nm)
   "Andy's review note 4 as a boolean: two rectangles, four comparisons.
    clearance promotes it from \"do they collide\" to \"do they clear each other
    by at least this much\", which is the actual drafting requirement.
    Touching is not overlapping - see mcp:bb-hit-open.
 
-   A missing layer returns null rather than false: an empty layer must not read
-   as \"no overlap, all good\"."
+   overlaps is NULL, never false, whenever the comparison did not happen. That
+   distinction is the entire lesson of the Draft 3 run: this probe reported
+   \"no overlap\" between the border and the diagram, and it was right by
+   accident and wrong in substance - the border is in paper space, the diagram
+   in model space, and the model-only filter simply never saw the border. A
+   false negative shaped exactly like a pass is worse than an error.
+
+   Two layers in different spaces are reported as not comparable rather than
+   unioned. Their coordinates are related by a viewport transform this code
+   does not have; a number computed across them would mean nothing. Pass an
+   explicit space (nil auto-detects a shared one) to compare within it."
   (mcp:begin-output)
   (mcp:budget-init nil nil nil)
   (if (null clearance) (setq clearance 0.0))
-  (setq a (mcp:layer-bbox layer-a))
-  (setq b (mcp:layer-bbox layer-b))
-  (if (or (null a) (null b))
-    (setq out (strcat "{\"overlaps\":false,\"intersection\":null,\"gap\":null"
-                      ",\"clears\":null"
-                      ",\"bbox_a\":" (mcp:bb-json a)
-                      ",\"bbox_b\":" (mcp:bb-json b)
-                      "," (mcp:budget-json) "}"))
-    (progn
-      (setq hit (mcp:bb-hit-open a b))
-      (setq sep (mcp:bb-gap a b))
-      (setq out (strcat "{\"overlaps\":" (if hit "true" "false")
-                        ",\"intersection\":" (mcp:bb-json (mcp:bb-inter a b))
-                        ",\"gap\":" (mcp:fmt sep)
-                        ",\"clears\":" (if (and (not hit) (>= sep clearance)) "true" "false")
-                        ",\"bbox_a\":" (mcp:bb-json a)
-                        ",\"bbox_b\":" (mcp:bb-json b)
-                        "," (mcp:budget-json) "}"))
-    )
+  (setq sa (mcp:layer-spaces layer-a))
+  (setq sb (mcp:layer-spaces layer-b))
+  (setq shared '())
+  (foreach nm sa (if (member nm sb) (setq shared (cons nm shared))))
+  (setq shared (reverse shared))
+  (if space (setq nm (mcp:space-name space)) (setq nm (car shared)))
+  (cond
+    ;; No space holds both layers, so there is nothing to compare.
+    ((null nm)
+     (setq out (strcat "{\"overlaps\":null,\"comparable\":false"
+                       ",\"reason\":\"layers occupy different spaces\""
+                       ",\"intersection\":null,\"gap\":null,\"clears\":null"
+                       ",\"spaces_a\":" (mcp:strings-json sa)
+                       ",\"spaces_b\":" (mcp:strings-json sb)
+                       ",\"space\":null"
+                       "," (mcp:budget-json) "}")))
+    (t
+     (setq a (mcp:layer-bbox layer-a nm))
+     (setq b (mcp:layer-bbox layer-b nm))
+     (if (or (null a) (null b))
+       (setq out (strcat "{\"overlaps\":null,\"comparable\":false"
+                         ",\"reason\":\"empty layer in this space\""
+                         ",\"intersection\":null,\"gap\":null,\"clears\":null"
+                         ",\"bbox_a\":" (mcp:bb-json a)
+                         ",\"bbox_b\":" (mcp:bb-json b)
+                         ",\"spaces_a\":" (mcp:strings-json sa)
+                         ",\"spaces_b\":" (mcp:strings-json sb)
+                         ",\"space\":\"" (mcp:esc nm) "\""
+                         "," (mcp:budget-json) "}"))
+       (progn
+         (setq hit (mcp:bb-hit-open a b))
+         (setq sep (mcp:bb-gap a b))
+         (setq out (strcat "{\"overlaps\":" (if hit "true" "false")
+                           ",\"comparable\":true,\"reason\":null"
+                           ",\"intersection\":" (mcp:bb-json (mcp:bb-inter a b))
+                           ",\"gap\":" (mcp:fmt sep)
+                           ",\"clears\":" (if (and (not hit) (>= sep clearance)) "true" "false")
+                           ",\"bbox_a\":" (mcp:bb-json a)
+                           ",\"bbox_b\":" (mcp:bb-json b)
+                           ",\"spaces_a\":" (mcp:strings-json sa)
+                           ",\"spaces_b\":" (mcp:strings-json sb)
+                           ",\"space\":\"" (mcp:esc nm) "\""
+                           "," (mcp:budget-json) "}"))
+       )
+     ))
   )
   (mcp:end-output)
   out
+)
+
+(defun mcp:strings-json (lst / out first s)
+  (setq out "" first T)
+  (foreach s lst
+    (setq out (strcat out (if first "" ",") "\"" (mcp:esc s) "\""))
+    (setq first nil)
+  )
+  (strcat "[" out "]")
 )
 
 ;; -----------------------------------------------------------------------
 ;; mcp:grid-map
 ;; -----------------------------------------------------------------------
 
-(defun mcp:cell-occupied (x1 y1 x2 y2 / ss)
-  "One crossing-window probe. This is where AutoCAD earns its keep: ssget
-   \"_C\" tests the true geometry, so a sheet border reads as a hollow frame
-   instead of a solid block of occupancy. The Python reference has to model
-   this with segment-versus-rectangle arithmetic; here it is one call."
-  (setq ss (ssget "_C" (list x1 y1) (list x2 y2) '((410 . "Model"))))
+(defun mcp:cell-occupied (x1 y1 x2 y2 space / ss)
+  "One crossing-window probe, in an explicitly named space.
+
+   This is where AutoCAD earns its keep: ssget \"_C\" tests the true geometry,
+   so a sheet border reads as a hollow frame instead of a solid block of
+   occupancy. The Python reference has to model that with segment-versus-
+   rectangle arithmetic; here it is one call.
+
+   CALLABLE ONLY FOR THE CURRENT SPACE. ssget \"_C\" is space-dependent, not
+   view-dependent: from Layout1 with CVPORT 1 it returns paper-space entities
+   for a model-coordinate window and reports nothing missing. Callers must
+   check mcp:current-space first - mcp:grid-map does, and switches to
+   mcp:grid-raster when they differ. Left as a bare ssget rather than made
+   self-checking on purpose: this is the fast path, called once per cell, and
+   a getvar per call is not free."
+  (setq ss (ssget "_C" (list x1 y1) (list x2 y2)
+                  (list (cons 410 (mcp:space-name space)))))
   (if ss (> (sslength ss) 0) nil)
 )
 
-(defun mcp:grid-rows (region cols rows / cw ch r c y-hi y-lo x-lo out row)
+(defun mcp:grid-rows (region cols rows space / cw ch r c y-hi y-lo x-lo out row)
   "Strip probing.
    The naive form is cols*rows probes: a 24x12 grid is 288 ssget calls, and on
    a 30k-entity drawing that does not fit in the IPC budget. Each row is tested
@@ -731,7 +929,7 @@
     (cond
       ((not (mcp:budget-probe))
        (setq out (cons (mcp:repeat-char "?" cols) out)))
-      ((not (mcp:cell-occupied (nth 0 region) y-lo (nth 2 region) y-hi))
+      ((not (mcp:cell-occupied (nth 0 region) y-lo (nth 2 region) y-hi space))
        (setq out (cons (mcp:repeat-char "." cols) out)))
       (t
        (setq row "" c 0)
@@ -740,7 +938,7 @@
          (setq row (strcat row
            (cond
              ((not (mcp:budget-probe)) "?")
-             ((mcp:cell-occupied x-lo y-lo (+ x-lo cw) y-hi) "#")
+             ((mcp:cell-occupied x-lo y-lo (+ x-lo cw) y-hi space) "#")
              (t ".")
            )))
          (setq c (1+ c))
@@ -758,29 +956,197 @@
   s
 )
 
-(defun mcp:grid-map (cols rows / region ss total lines out first ln)
+;; -----------------------------------------------------------------------
+;; Raster occupancy - the fallback for a space that is not current
+;; -----------------------------------------------------------------------
+
+(defun mcp:clamp (v lo hi) (cond ((< v lo) lo) ((> v hi) hi) (t v)))
+
+(defun mcp:set-nth (lst idx val / out i)
+  "Functional replace-by-index. AutoLISP has no arrays, and this list is
+   `rows` long - sixteen, not thirty thousand - so rebuilding it per marked
+   row is cheaper than any structure that would avoid it."
+  (setq out '() i 0)
+  (foreach v lst
+    (setq out (cons (if (= i idx) val v) out))
+    (setq i (1+ i))
+  )
+  (reverse out)
+)
+
+(defun mcp:space-boxes (space / ss n i b out)
+  "Every measurable bounding box in one space, as a list.
+
+   Collected once and held, rather than measured twice. The raster needs both
+   the region and the boxes, and taking two passes to get them is two entget
+   scans over 29,717 entities inside a 7 s budget - the second one is the one
+   that runs out, and a grid that truncates is a grid of '?'. This is the only
+   place the drawing is read."
+  (setq ss (mcp:space-ss space))
+  (setq n (if ss (sslength ss) 0) i 0 out '())
+  (while (and (< i n) (mcp:budget-entity))
+    (setq b (mcp:ent-bbox (ssname ss i)))
+    (if b (setq out (cons b out)))
+    (setq i (1+ i))
+  )
+  out
+)
+
+(defun mcp:bb-union-all (boxes / box b)
+  (setq box nil)
+  (foreach b boxes (setq box (mcp:bb-union box b)))
+  box
+)
+
+(defun mcp:raster-expired ( )
+  "Time-only stop for the marking loop. The entities were already charged
+   against the ceiling when their boxes were collected, so charging them again
+   would halve the effective budget; what still has to be bounded is the
+   pathological drawing where every entity spans the whole grid."
+  (cond
+    (*mcp-bg-reason* T)
+    ((mcp:budget-expired) (setq *mcp-bg-reason* "time") T)
+    (t nil)
+  )
+)
+
+(defun mcp:grid-raster (boxes region cols rows / b cw ch masks
+                                                 c0 c1 r0 r1 r c y-hi y-lo x-lo
+                                                 m out fill row)
+  "Occupancy by marking cells from each entity's bbox, instead of probing each
+   cell. Transcribed from probes.bbox_raster, which takes the same box list;
+   TestRasterMatchesProbing holds it against grid_map(bbox_probe(...)).
+
+   Why the loop is inverted: probing costs probes x entities. A 24x16 grid over
+   Draft 3's 29,717 model-space entities is up to 12M comparisons, which does
+   not happen inside the 7 s budget - the probe would truncate and answer '?'
+   for the whole sheet. Marking costs entities x cells-touched, and nearly
+   every entity touches one or two.
+
+   Why it exists: mcp:cell-occupied cannot reach a space that is not current.
+   This can, at the price of being conservative - a bounding box is not the
+   geometry, so a hollow border reads as a solid block. The caller is told
+   which mode produced the grid, because the two cannot be read the same way.
+
+   Cells left unmarked when the scan truncates are '?', not '.'. Every '#' a
+   partial scan reports was found honestly; it has established no '.' at all."
+  (setq cw (/ (- (nth 2 region) (nth 0 region)) (float cols)))
+  (setq ch (/ (- (nth 3 region) (nth 1 region)) (float rows)))
+  (setq masks '() r 0)
+  (while (< r rows) (setq masks (cons 0 masks) r (1+ r)))
+  (foreach b boxes
+    (if (not (mcp:raster-expired))
+      (progn
+        ;; Widen by a cell each way, then filter with the real comparison. A
+        ;; closed-form index range has to decide what happens when an edge
+        ;; lands exactly on a cell boundary, and drafting geometry lands on
+        ;; boundaries constantly; this way the answer comes from
+        ;; mcp:bb-hit-closed, the same rule the crossing grid uses.
+        (setq c0 (mcp:clamp (1- (fix (/ (- (nth 0 b) (nth 0 region)) cw))) 0 (1- cols)))
+        (setq c1 (mcp:clamp (1+ (fix (/ (- (nth 2 b) (nth 0 region)) cw))) 0 (1- cols)))
+        (setq r0 (mcp:clamp (1- (fix (/ (- (nth 3 region) (nth 3 b)) ch))) 0 (1- rows)))
+        (setq r1 (mcp:clamp (1+ (fix (/ (- (nth 3 region) (nth 1 b)) ch))) 0 (1- rows)))
+        (setq r r0)
+        (while (<= r r1)
+          (setq y-hi (- (nth 3 region) (* r ch)))
+          (setq y-lo (- y-hi ch))
+          (setq m (nth r masks))
+          (setq c c0)
+          (while (<= c c1)
+            (setq x-lo (+ (nth 0 region) (* c cw)))
+            (if (mcp:bb-hit-closed (list x-lo y-lo (+ x-lo cw) y-hi) b)
+              (setq m (logior m (lsh 1 c))))
+            (setq c (1+ c))
+          )
+          (setq masks (mcp:set-nth masks r m))
+          (setq r (1+ r))
+        )
+      )
+    )
+  )
+  (setq fill (if *mcp-bg-reason* "?" "."))
+  (setq out '())
+  (foreach m masks
+    (setq row "" c 0)
+    (while (< c cols)
+      (setq row (strcat row (if (/= 0 (logand m (lsh 1 c))) "#" fill)))
+      (setq c (1+ c))
+    )
+    (setq out (cons row out))
+  )
+  (reverse out)
+)
+
+(defun mcp:grid-map (cols rows) (mcp:grid-map-in cols rows "Model"))
+
+(defun mcp:grid-map-in (cols rows space / region ss total lines out first ln
+                                          nm mode region-trunc boxes)
   "Does the layout read correctly, coarse - the L3 rung.
 
-   NOTE for the live validation run: ssget \"_C\" with explicit points is
-   documented as database-wide, but it also honours layer visibility, so a
-   frozen or off layer contributes nothing. total is reported alongside so a
-   grid that comes back empty against a non-empty drawing is visible as a
-   contradiction rather than read as an empty sheet."
+   Two modes, and the payload names which one ran, because they answer
+   differently. \"crossing\" is ssget \"_C\" against the real geometry, so a
+   sheet border reads as a hollow frame. \"bbox\" is mcp:grid-raster, which is
+   conservative: it marks every cell an entity's bounding box touches, so that
+   same border reads solid. Crossing is only available for the CURRENT space -
+   see mcp:current-space for the measurement that establishes it - so a grid of
+   model space taken from a layout tab is necessarily the conservative one.
+
+   The drawing is read ONCE, and which pass that is depends on the mode.
+   Crossing mode needs only the region, so it scans for extents and then lets
+   ssget do the occupancy. Raster mode needs the region AND every box, so it
+   collects the boxes and unions them - measuring twice would be two entget
+   scans over 29,717 entities inside a 7 s budget, and the second is the one
+   that runs out.
+
+   The crossing path restarts the budget before probing. Sharing it with the
+   region scan is what produced the first half of the Draft 3 failure:
+   computing the region consumed all 20,000 entities of the ceiling and the
+   grid came back entirely '?' at probes: 0. It reported unprobed rather than
+   empty - the safeguard working - but it answered nothing.
+
+   ssget also honours layer visibility, so a frozen or off layer contributes
+   nothing in crossing mode. entities is reported alongside, so a grid that
+   comes back empty against a non-empty drawing reads as a contradiction
+   rather than as an empty sheet."
   (mcp:begin-output)
   (mcp:budget-init nil nil nil)
   (if (null cols) (setq cols 24))
   (if (null rows) (setq rows 12))
-  (setq region (mcp:computed-extents))
-  (setq ss (mcp:model-ss))
+  ;; mcp:grid-raster packs a row into one integer bitmask, and AutoLISP's lsh
+  ;; is 32-bit signed. Past 30 columns the mask would go negative and cells
+  ;; would read empty.
+  (if (> cols 30) (setq cols 30))
+  (setq nm (mcp:space-name space))
+  (setq mode (if (= nm (mcp:current-space)) "crossing" "bbox"))
+  (if (= mode "crossing")
+    (setq region (mcp:computed-extents-in nm))
+    (progn
+      (setq boxes (mcp:space-boxes nm))
+      (setq region (mcp:bb-union-all boxes))
+    )
+  )
+  (setq region-trunc *mcp-bg-reason*)
+  (setq ss (mcp:space-ss nm))
   (setq total (if ss (sslength ss) 0))
   (if (or (null region)
           (<= (- (nth 2 region) (nth 0 region)) 0.0)
           (<= (- (nth 3 region) (nth 1 region)) 0.0))
     (setq out (strcat "{\"grid\":[],\"region\":null,\"cols\":" (itoa cols)
                       ",\"rows\":" (itoa rows) ",\"entities\":" (itoa total)
+                      ",\"space\":\"" (mcp:esc nm) "\""
+                      ",\"current_space\":\"" (mcp:esc (mcp:current-space)) "\""
+                      ",\"mode\":\"" mode "\""
                       ",\"probes\":0," (mcp:budget-json) "}"))
     (progn
-      (setq lines (mcp:grid-rows region cols rows))
+      ;; Crossing mode gets a fresh ceiling because its probes are a separate
+      ;; cost from the region scan. Raster mode must NOT reset: its boxes were
+      ;; already paid for above, and clearing the truncation reason here would
+      ;; turn a partial scan's unmarked cells from '?' into '.' - the precise
+      ;; lie this whole change exists to remove.
+      (if (= mode "crossing") (mcp:budget-init nil nil nil))
+      (setq lines (if (= mode "crossing")
+                    (mcp:grid-rows region cols rows nm)
+                    (mcp:grid-raster boxes region cols rows)))
       (setq out "" first T)
       (foreach ln lines
         (setq out (strcat out (if first "" ",") "\"" ln "\""))
@@ -790,6 +1156,11 @@
                         ",\"region\":" (mcp:bb-json region)
                         ",\"cols\":" (itoa cols) ",\"rows\":" (itoa rows)
                         ",\"entities\":" (itoa total)
+                        ",\"space\":\"" (mcp:esc nm) "\""
+                        ",\"current_space\":\"" (mcp:esc (mcp:current-space)) "\""
+                        ",\"mode\":\"" mode "\""
+                        ",\"region_truncated\":"
+                        (if region-trunc (strcat "\"" region-trunc "\"") "false")
                         ",\"probes\":" (itoa *mcp-bg-probes*)
                         "," (mcp:budget-json) "}"))
     )
@@ -798,10 +1169,12 @@
   out
 )
 
-(defun mcp:computed-extents ( / ss n i box b)
-  "Union of every entity bbox. Separate from mcp:extents because the snapshot
-   and the grid both need the value rather than the JSON."
-  (setq ss (mcp:model-ss))
+(defun mcp:computed-extents ( ) (mcp:computed-extents-in "Model"))
+
+(defun mcp:computed-extents-in (space / ss n i box b)
+  "Union of every entity bbox in one space. Separate from mcp:extents because
+   the snapshot and the grid both need the value rather than the JSON."
+  (setq ss (mcp:space-ss space))
   (setq n (if ss (sslength ss) 0) i 0 box nil)
   (while (and (< i n) (mcp:budget-entity))
     (setq b (mcp:ent-bbox (ssname ss i)))
@@ -831,9 +1204,11 @@
   n
 )
 
-(defun mcp:snapshot (filepath / cols rows fp ss n i data lyr b box acc rec
-                                approx unmeasured truncated items it lines ln
-                                exact tmp)
+(defun mcp:snapshot (filepath) (mcp:snapshot-in filepath "Model"))
+
+(defun mcp:snapshot-in (filepath space / cols rows fp ss n i data lyr b box acc
+                                rec approx unmeasured truncated items it lines
+                                ln exact tmp nm mode boxes)
   "The whole drawing as deterministic, diffable text, written to filepath.
 
    Modelled on Playwright's ARIA snapshots: commit the structure as text and
@@ -848,10 +1223,13 @@
   (mcp:begin-output)
   (mcp:budget-init nil nil nil)
   (setq cols 24 rows 12)
+  (setq nm (mcp:space-name space))
+  (setq mode (if (= nm (mcp:current-space)) "crossing" "bbox"))
 
   ;; --- scan ---
-  (setq ss (mcp:model-ss))
-  (setq n (if ss (sslength ss) 0) i 0 acc '() box nil approx 0 unmeasured 0)
+  (setq ss (mcp:space-ss nm))
+  (setq n (if ss (sslength ss) 0) i 0 acc '() box nil approx 0 unmeasured 0
+        boxes '())
   (while (and (< i n) (mcp:budget-entity))
     (setq data (entget (ssname ss i)))
     (setq lyr (mcp:group data 8 "0"))
@@ -859,6 +1237,10 @@
     (setq exact (mcp:ent-exact-p data))
     (if b
       (progn (setq box (mcp:bb-union box b))
+             ;; Kept for the raster below. This loop is the only entget scan
+             ;; the snapshot makes, and re-reading 29,717 entities to build
+             ;; the grid would double the one cost that matters.
+             (setq boxes (cons b boxes))
              (if (not exact) (setq approx (1+ approx))))
       (setq unmeasured (1+ unmeasured))
     )
@@ -885,6 +1267,11 @@
       (strcat "{\"ok\":false,\"error\":\"cannot open " (mcp:esc tmp) "\"}"))
     (progn
       (write-line (strcat "# mcp-snapshot v" (itoa *mcp-snapshot-version*)) fp)
+      ;; Which space this describes. Without it, a snapshot of the wrong tab
+      ;; is indistinguishable from a snapshot of a changed drawing - and on a
+      ;; paper-space-composed sheet the two sides are routinely on different
+      ;; tabs.
+      (write-line (strcat "space " nm) fp)
       ;; A truncated snapshot that does not say so is worse than no snapshot:
       ;; the golden comparison would pass on partial data and call it a match.
       (write-line (strcat "entities " (itoa n)
@@ -906,7 +1293,7 @@
       ;; the entity count over from the scan above would make the text dump
       ;; truncate immediately on any drawing large enough to matter.
       (mcp:budget-init *mcp-max-entities* *mcp-max-probes* nil)
-      (setq items (mcp:text-items))
+      (setq items (mcp:text-items nm))
       (foreach it items
         (write-line (strcat "text " (nth 1 it) " "
                             (mcp:fmt (nth 2 it)) " " (mcp:fmt (nth 3 it))
@@ -920,10 +1307,21 @@
           ;; The grid is the one part with no probe ceiling: a snapshot is a
           ;; deliberate, occasional act, and a partial grid would silently
           ;; differ from the fixture on every run.
-          (mcp:budget-init *mcp-max-entities* 1000000 nil)
-          (write-line (strcat "grid " (itoa cols) "x" (itoa rows) " "
+          ;; Crossing mode only: its probes are a separate cost from the scan.
+          ;; Raster mode must not reset, because budget-init clears the
+          ;; truncation reason and mcp:grid-raster reads that to decide whether
+          ;; an unmarked cell is '.' or '?'. Resetting it here would make a
+          ;; partial scan assert an empty sheet.
+          (if (= mode "crossing") (mcp:budget-init *mcp-max-entities* 1000000 nil))
+          ;; The mode is part of the fixture because the two grids disagree by
+          ;; design: crossing resolves a hollow border as hollow, bbox fills
+          ;; it. A .snap taken in one mode and diffed against the other would
+          ;; report a drawing change that did not happen.
+          (write-line (strcat "grid " (itoa cols) "x" (itoa rows) " " mode " "
                               (mcp:bb-text box)) fp)
-          (setq lines (mcp:grid-rows box cols rows))
+          (setq lines (if (= mode "crossing")
+                        (mcp:grid-rows box cols rows nm)
+                        (mcp:grid-raster boxes box cols rows)))
           (foreach ln lines (write-line (strcat "grid | " ln " |") fp))
         )
         (write-line "grid none" fp)
@@ -936,10 +1334,13 @@
       (strcat "{\"ok\":true,\"path\":\"" (mcp:esc filepath) "\""
               ",\"entities\":" (itoa n)
               ",\"layers\":" (itoa (length acc))
+              ",\"space\":\"" (mcp:esc nm) "\""
+              ",\"mode\":\"" mode "\""
               ",\"text\":" (itoa (length items)) "}")
     )
   )
 )
 
 (princ "\nmcp_probes.lsp loaded: mcp:extents mcp:bbox-of mcp:bbox-by-layer mcp:text-dump mcp:overlap mcp:grid-map mcp:snapshot")
+(princ "\n  space-explicit forms: mcp:extents-in mcp:bbox-by-layer-in mcp:text-dump-in mcp:overlap-in mcp:grid-map-in mcp:snapshot-in")
 (princ)

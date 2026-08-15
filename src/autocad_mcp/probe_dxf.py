@@ -36,15 +36,60 @@ def entity_info(entity) -> dict:
     return info
 
 
-def collect(doc) -> tuple[list[dict], dict[str, list[dict]]]:
-    """Modelspace entities and block definitions, as probe-shaped dicts."""
-    entities = [entity_info(e) for e in doc.modelspace()]
+#: The space every probe used to assume, and still defaults to.
+MODEL = "Model"
+
+
+def spaces(doc) -> list[str]:
+    """Every space in the document: "Model" then each layout by name.
+
+    Named the way AutoLISP names them — DXF group 410 carries "Model" or the
+    layout's tab name, and `ssget "_X" '((410 . <name>))'` takes the same
+    string. Two sides, one vocabulary.
+    """
+    return [MODEL] + [name for name in doc.layout_names() if name != "Model"]
+
+
+def entities_in(doc, space: str = MODEL):
+    """The entity container for one space.
+
+    Draft 3 is the case that makes this necessary: 29,717 entities in model
+    space, 26 in Layout1, the border and title block entirely in the latter and
+    the diagram entirely in the former. A probe that silently means "model
+    space" answers a different question than the one asked and looks like it
+    answered the right one.
+    """
+    if space == MODEL:
+        return doc.modelspace()
+    if space not in doc.layout_names():
+        raise KeyError(f"no such space: {space!r}; have {spaces(doc)}")
+    return doc.layout(space)
+
+
+def collect(doc, space: str = MODEL) -> tuple[list[dict], dict[str, list[dict]]]:
+    """One space's entities and the block definitions, as probe-shaped dicts.
+
+    Blocks are document-wide, not per-space: an INSERT in a layout references
+    the same definition as one in model space.
+    """
+    entities = [entity_info(e) for e in entities_in(doc, space)]
     blocks = {
         block.name: [entity_info(e) for e in block]
         for block in doc.blocks
         if not block.name.startswith("*")
     }
     return entities, blocks
+
+
+def layer_spaces(doc, layer: str) -> list[str]:
+    """Which spaces a layer actually has entities in.
+
+    A layer is a document-wide name, not a place. `border line 02` and
+    `ECSI_Backpan` both exist in Draft 3's layer table and never appear in the
+    same space, which is why comparing their bounding boxes produces a number
+    that means nothing. mcp:overlap asks this before it answers.
+    """
+    return [s for s in spaces(doc) if any(True for _ in entities_in(doc, s).query(f'*[layer=="{layer}"]'))]
 
 
 def header_extents(doc) -> BBox | None:
@@ -68,13 +113,13 @@ def hidden_layer_count(doc) -> int:
     return sum(1 for layer in doc.layers if layer.is_off() or layer.is_frozen())
 
 
-def snapshot_doc(doc, cols: int = 24, rows: int = 12) -> str:
-    entities, blocks = collect(doc)
+def snapshot_doc(doc, cols: int = 24, rows: int = 12, space: str = MODEL) -> str:
+    entities, blocks = collect(doc, space)
     return snapshot(
         entities, blocks, header_extents(doc),
-        cols=cols, rows=rows, hidden_layers=hidden_layer_count(doc),
+        cols=cols, rows=rows, hidden_layers=hidden_layer_count(doc), space=space,
     )
 
 
-def snapshot_file(path: str | Path, cols: int = 24, rows: int = 12) -> str:
-    return snapshot_doc(ezdxf.readfile(str(path)), cols=cols, rows=rows)
+def snapshot_file(path: str | Path, cols: int = 24, rows: int = 12, space: str = MODEL) -> str:
+    return snapshot_doc(ezdxf.readfile(str(path)), cols=cols, rows=rows, space=space)

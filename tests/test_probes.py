@@ -24,6 +24,7 @@ from autocad_mcp.probes import (
     bbox_is_exact,
     bbox_of,
     bbox_probe,
+    bbox_raster,
     bbox_union,
     ellipse_bbox,
     entity_bbox,
@@ -447,10 +448,32 @@ class TestOverlap:
         assert overlap(BBox(0, 0, 10, 10), BBox(14, 0, 20, 10))["gap"] == pytest.approx(4.0)
 
     def test_missing_side_is_not_a_pass(self):
-        """An empty layer must not read as "no overlap, all good"."""
+        """An empty layer must not read as "no overlap, all good".
+
+        `overlaps` is None rather than False: the live Draft 3 run returned
+        "no overlap" between the border and the diagram and it was a false
+        negative — the border is in paper space, the diagram in model space,
+        and the model-only layer filter simply never saw the border. False and
+        None both mean "not overlapping" to a careless reader, which is why
+        the answer that was never computed has to have a different shape.
+        """
         result = overlap(None, BBox(0, 0, 1, 1))
-        assert result["overlaps"] is False
+        assert result["overlaps"] is None
         assert result["clears"] is None
+        assert result["reason"] == "empty layer"
+
+    def test_layers_in_different_spaces_are_not_comparable(self):
+        """Two real boxes, and comparing them is still meaningless: paper-space
+        and model-space coordinates are related by a viewport transform this
+        code does not have. A number computed across them would be a number."""
+        result = overlap(BBox(0, 0, 36, 24), BBox(0, 0, 44, 56), comparable=False,
+                         reason="layers occupy different spaces")
+        assert result["overlaps"] is None
+        assert result["comparable"] is False
+        assert result["reason"] == "layers occupy different spaces"
+
+    def test_a_real_comparison_says_it_is_one(self):
+        assert overlap(BBox(0, 0, 10, 10), BBox(20, 0, 30, 10))["comparable"] is True
 
 
 REGION = BBox(0, 0, 100, 100)
@@ -635,6 +658,92 @@ class TestGridMap:
         probe = bbox_probe(_boxes((1, 1, 25, 24)))
         grid = grid_map(probe, REGION, 4, 4, budget=_unlimited())["grid"]
         assert grid[-1] == OCCUPIED * 2 + EMPTY * 2
+
+
+class TestRasterMatchesProbing:
+    """bbox_raster inverts grid_map's loop, and the AutoLISP port relies on the
+    two producing the same grid.
+
+    The inversion is not an optimisation for its own sake. `ssget "_C"` cannot
+    reach a space that is not current — measured on Draft 3 from Layout1, a
+    crossing window over model coordinates returned paper-space entities — so a
+    grid of model space taken from a layout tab has to be computed from the
+    entities instead of probed. Probing costs probes x entities, which is 12M
+    comparisons on that drawing and does not happen inside the 7 s IPC budget.
+    Marking costs entities x cells-touched.
+    """
+
+    @pytest.mark.parametrize(
+        "boxes",
+        [
+            [],
+            _boxes((0, 0, 100, 100)),
+            _boxes((0, 0, 10, 10)),
+            _boxes((45, 45, 55, 55)),
+            _boxes((0, 90, 100, 100), (0, 0, 100, 10)),
+            _boxes((10, 10, 20, 20), (80, 80, 90, 90), (40, 0, 60, 100)),
+            _boxes((0, 0, 0, 0)),
+            _boxes((99.9, 99.9, 100, 100)),
+            # Entirely outside the region, on each side. The index arithmetic
+            # goes negative here, and AutoLISP's `fix` truncates toward zero
+            # where Python's floor goes toward -inf; both clamp to the same
+            # cell, and the explicit hit test decides.
+            _boxes((-50, -50, -10, -10)),
+            _boxes((200, 200, 300, 300)),
+            _boxes((-10, 40, 110, 60)),
+            # Edges exactly on cell boundaries — drafting geometry does this
+            # constantly, and a closed-form index range has to guess.
+            _boxes((25, 25, 50, 50)),
+            _boxes((0, 0, 25, 25), (75, 75, 100, 100)),
+        ],
+    )
+    @pytest.mark.parametrize("cols,rows", [(8, 4), (16, 8), (24, 12), (3, 3), (30, 16)])
+    def test_same_grid_as_probing_every_cell(self, boxes, cols, rows):
+        raster = bbox_raster(boxes, REGION, cols, rows, budget=_unlimited())
+        oracle = grid_map_naive(bbox_probe(boxes), REGION, cols, rows)
+        assert raster["grid"] == oracle["grid"]
+
+    def test_it_is_conservative_where_crossing_is_exact(self):
+        """The cost of the fallback, stated as a test. A hollow border reads as
+        a solid block, because a bounding box is not the geometry. This is why
+        the mode is reported: the two grids are not interchangeable."""
+        border = {"type": "LWPOLYLINE", "closed": True,
+                  "vertices": [[0, 0], [100, 0], [100, 100], [0, 100]]}
+        crossing = grid_map(geometry_probe([border]), REGION, 8, 4, budget=_unlimited())
+        raster = bbox_raster([entity_bbox(border)], REGION, 8, 4, budget=_unlimited())
+        assert crossing["grid"][1] == OCCUPIED + EMPTY * 6 + OCCUPIED  # hollow
+        assert raster["grid"][1] == OCCUPIED * 8                       # filled
+        # Conservative in the safe direction: never empty where crossing is not.
+        for r_row, c_row in zip(raster["grid"], crossing["grid"]):
+            for r, c in zip(r_row, c_row):
+                assert not (r == EMPTY and c == OCCUPIED)
+
+    def test_the_two_modes_are_labelled(self):
+        assert bbox_raster([], REGION, 4, 4, budget=_unlimited())["mode"] == "bbox"
+        assert grid_map(bbox_probe([]), REGION, 4, 4, budget=_unlimited())["mode"] == "crossing"
+
+    def test_unscanned_cells_are_unknown_not_empty(self):
+        """A truncated scan has found every '#' it reports honestly. It has
+        established no '.' at all — which is exactly what the old grid got
+        wrong when it answered solid '.' against 29,717 entities."""
+        boxes = _boxes(*[(i, i, i + 1, i + 1) for i in range(0, 90, 10)])
+        result = bbox_raster(boxes, REGION, 8, 4,
+                             budget=Budget(max_entities=2, clock=lambda: 0.0))
+        assert result["truncated"] is True
+        assert EMPTY not in "".join(result["grid"])
+        assert UNKNOWN in "".join(result["grid"])
+
+    def test_a_complete_scan_may_say_empty(self):
+        result = bbox_raster(_boxes((0, 0, 10, 10)), REGION, 8, 4, budget=_unlimited())
+        assert result["truncated"] is False
+        assert UNKNOWN not in "".join(result["grid"])
+        assert EMPTY in "".join(result["grid"])
+
+    def test_row_zero_is_the_top(self):
+        grid = bbox_raster(_boxes((0, 90, 100, 100)), REGION, 4, 4,
+                           budget=_unlimited())["grid"]
+        assert grid[0] == OCCUPIED * 4
+        assert grid[-1] == EMPTY * 4
 
 
 def _unlimited():

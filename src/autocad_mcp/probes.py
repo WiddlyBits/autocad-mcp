@@ -23,7 +23,10 @@ from typing import Callable, Iterable, Sequence
 
 from autocad_mcp.config import IPC_TIMEOUT
 
-SNAPSHOT_VERSION = 1
+#: v2 added the `space` line and the grid's mode. Both exist because v1 could
+#: not say which space it described, and a snapshot of the wrong space is
+#: indistinguishable from a snapshot of a changed drawing.
+SNAPSHOT_VERSION = 2
 
 #: Nominal glyph advance as a fraction of text height.
 #:
@@ -577,7 +580,13 @@ def text_dump(
     }
 
 
-def overlap(a: BBox | None, b: BBox | None, clearance: float = 0.0) -> dict:
+def overlap(
+    a: BBox | None,
+    b: BBox | None,
+    clearance: float = 0.0,
+    comparable: bool = True,
+    reason: str | None = None,
+) -> dict:
     """mcp:overlap — Andy's review note 4 as a boolean.
 
     "The border must not overlap the diagram" is two rectangles and four
@@ -586,9 +595,28 @@ def overlap(a: BBox | None, b: BBox | None, clearance: float = 0.0) -> dict:
     requirement.
 
     Touching is not overlapping — see intersects_open.
+
+    `overlaps` is None, not False, whenever the question was not actually
+    answered. That distinction is not pedantry: on Draft 3 this probe returned
+    "no overlap" because the border is in paper space and the diagram in model
+    space, so one of the two boxes was empty — a false negative wearing the
+    exact same shape as a pass. False means measured and clear; None means the
+    comparison did not happen, and `reason` says why.
+
+    `comparable=False` is for boxes that exist but cannot be compared —
+    two layers in different spaces, whose coordinates are related by a viewport
+    transform this code does not have. Unioning them would produce a number,
+    and the number would mean nothing.
     """
-    if a is None or b is None:
-        return {"overlaps": False, "intersection": None, "gap": None, "clears": None}
+    if not comparable or a is None or b is None:
+        return {
+            "overlaps": None,
+            "intersection": None,
+            "gap": None,
+            "clears": None,
+            "comparable": comparable,
+            "reason": reason or ("empty layer" if comparable else "not comparable"),
+        }
     hit = intersects_open(a, b)
     inter = intersection(a, b)
     separation = gap(a, b)
@@ -597,6 +625,8 @@ def overlap(a: BBox | None, b: BBox | None, clearance: float = 0.0) -> dict:
         "intersection": inter.as_list() if inter else None,
         "gap": separation,
         "clears": (not hit) and separation >= clearance,
+        "comparable": True,
+        "reason": None,
     }
 
 
@@ -655,6 +685,9 @@ def grid_map(
         "cols": cols,
         "rows": rows,
         "region": region.as_list(),
+        # Named because a bbox_raster grid cannot be read the same way: this
+        # one resolves a hollow border as hollow, that one does not.
+        "mode": "crossing",
         "probes": budget.probes,
         "truncated": budget.exhausted,
         "truncated_reason": budget.reason,
@@ -703,6 +736,79 @@ def bbox_probe(boxes: Sequence[BBox]) -> Callable[[float, float, float, float], 
         return any(intersects_closed(window, b) for b in boxes)
 
     return probe
+
+
+def _clamp(v: int, lo: int, hi: int) -> int:
+    return lo if v < lo else (hi if v > hi else v)
+
+
+def bbox_raster(
+    boxes: Sequence[BBox],
+    region: BBox,
+    cols: int = 24,
+    rows: int = 12,
+    budget: Budget | None = None,
+) -> dict:
+    """Occupancy by marking cells from each box, rather than probing each cell.
+
+    Same grid as ``grid_map(bbox_probe(boxes), ...)`` — TestRasterMatchesProbing
+    pins that — but the loop is inverted, and the inversion is the entire point.
+
+    Probing costs probes x entities. A 24x16 grid against Draft 3's 29,717
+    entities is up to 12M comparisons, and AutoLISP does not do that inside a
+    7 s IPC budget; the probe would truncate and answer '?'. Marking costs
+    entities x cells-touched, and almost every entity touches one or two.
+
+    Why this exists at all: `ssget "_C"` is the cheap way to test a cell and it
+    models the *geometry*, so a sheet border reads as a hollow frame. But it
+    only ever sees the current space — measured, it returned the same 24
+    paper-space entities for a paper-coordinate box and a model-coordinate box
+    while CTAB was Layout1 — so a grid of model space taken from a layout tab
+    cannot use it at any zoom. This is the fallback for that case: view-
+    independent and space-explicit, at the cost of being conservative. A box is
+    not the geometry, so a hollow border reads solid. Callers are told which
+    mode produced the grid because the two cannot be read the same way.
+
+    On truncation the unmarked cells are UNKNOWN, never EMPTY. A partial scan
+    has found every '#' it reports honestly; it has established no '.' at all.
+    """
+    budget = budget or Budget()
+    marked = [[False] * cols for _ in range(rows)]
+    cw = region.width / cols
+    ch = region.height / rows
+
+    if cw > 0 and ch > 0:
+        for box in boxes:
+            if not budget.spend_entity():
+                break
+            # Widen by a cell on each side, then filter with the real
+            # comparison. A closed-form index range has to decide what happens
+            # when a box edge lands exactly on a cell boundary, and drafting
+            # geometry lands on boundaries constantly; this way the answer
+            # comes from intersects_closed, the same rule bbox_probe uses.
+            c0 = _clamp(int(math.floor((box.xmin - region.xmin) / cw)) - 1, 0, cols - 1)
+            c1 = _clamp(int(math.floor((box.xmax - region.xmin) / cw)) + 1, 0, cols - 1)
+            r0 = _clamp(int(math.floor((region.ymax - box.ymax) / ch)) - 1, 0, rows - 1)
+            r1 = _clamp(int(math.floor((region.ymax - box.ymin) / ch)) + 1, 0, rows - 1)
+            for r in range(r0, r1 + 1):
+                y_hi = region.ymax - r * ch
+                y_lo = y_hi - ch
+                for c in range(c0, c1 + 1):
+                    x_lo = region.xmin + c * cw
+                    if intersects_closed(BBox(x_lo, y_lo, x_lo + cw, y_hi), box):
+                        marked[r][c] = True
+
+    fill = UNKNOWN if budget.exhausted else EMPTY
+    return {
+        "grid": ["".join(OCCUPIED if m else fill for m in row) for row in marked],
+        "cols": cols,
+        "rows": rows,
+        "region": region.as_list(),
+        "mode": "bbox",
+        "scanned": budget.entities,
+        "truncated": budget.exhausted,
+        "truncated_reason": budget.reason,
+    }
 
 
 #: Segments per full circle when flattening curves.
@@ -910,6 +1016,7 @@ def snapshot(
     rows: int = 12,
     budget: Budget | None = None,
     hidden_layers: int = 0,
+    space: str = "Model",
 ) -> str:
     """mcp:snapshot — the whole drawing as deterministic, diffable text.
 
@@ -946,6 +1053,11 @@ def snapshot(
 
     lines = [
         f"# mcp-snapshot v{SNAPSHOT_VERSION}",
+        # Which space this describes. A snapshot that does not name it is
+        # indistinguishable from a snapshot of a changed drawing when the two
+        # sides happen to be looking at different tabs — and on a
+        # paper-space-composed sheet they routinely are.
+        f"space {space}",
         # A truncated snapshot that does not say so is worse than no snapshot:
         # the golden comparison would pass on partial data and call it a match.
         f"entities {len(entities)} approx {approx} unmeasured {unmeasured} "
@@ -977,7 +1089,9 @@ def snapshot(
         mapped = grid_map(geometry_probe([e for e, _ in measured], blocks), computed,
                           cols=cols, rows=rows,
                           budget=Budget(max_probes=10**6, clock=lambda: 0.0))
-        lines.append(f"grid {cols}x{rows} {computed.fmt()}")
+        # The mode is part of the fixture because the two grids disagree by
+        # design: crossing resolves a hollow border as hollow, bbox fills it.
+        lines.append(f"grid {cols}x{rows} {mapped['mode']} {computed.fmt()}")
         for row in mapped["grid"]:
             lines.append(f"grid | {row} |")
     else:
