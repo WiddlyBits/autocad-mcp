@@ -167,7 +167,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result)
+(defun mcp-dispatch-command (cmd-name params-json / result filedia dwg-before dwg-after)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (cond
     ;; --- Ping ---
@@ -312,8 +312,30 @@
     ((= cmd-name "drawing-save-as-dxf")
      (progn
        (setq path (mcp-json-get-string params-json "path"))
-       (if path
-         (progn (command "_.SAVEAS" "DXF" path) (cons T (strcat "\"" path "\"")))
+       (if (and path (> (strlen path) 0))
+         (progn
+           ;; SAVEAS is the only DXF writer LT exposes: there is no COM, and
+           ;; EXPORT's format list has no DXF. So this renames the active
+           ;; document to the .dxf — an intrinsic property of SAVEAS, not
+           ;; something a flag turns off. Undoing the rename would take a second
+           ;; SAVEAS back to the .dwg, i.e. rewriting a drawing the caller only
+           ;; asked to export. The rename is reported instead, measured rather
+           ;; than asserted, so the caller learns it here and not from a later
+           ;; QSAVE quietly writing DXF over their drawing.
+           (setq dwg-before (getvar "DWGNAME"))
+           ;; Without this, FILEDIA 1 raises a modal Save dialog and the
+           ;; dispatcher hangs for the whole 10 s IPC window. Restores the value
+           ;; it found, not a hardcoded 1.
+           (setq filedia (getvar "FILEDIA"))
+           (setvar "FILEDIA" 0)
+           (command "_.SAVEAS" "DXF" path)
+           (setvar "FILEDIA" filedia)
+           (setq dwg-after (getvar "DWGNAME"))
+           (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                           "\", \"document\": \"" (mcp-escape-string dwg-after)
+                           "\", \"renamed\": "
+                           (if (= dwg-before dwg-after) "false" "true")
+                           "}")))
          (cons nil "Save path required"))))
 
     ((= cmd-name "drawing-purge")

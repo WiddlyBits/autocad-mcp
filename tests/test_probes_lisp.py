@@ -451,6 +451,105 @@ class TestSnapshotFormatMatches:
         assert "(open tmp \"w\")" in body
 
 
+class TestFileDialogsAreSuppressed:
+    """A modal dialog is not an error. The dispatcher stops answering, Python
+    waits out the full 10 s IPC window, and the call comes back as a timeout
+    with no hint that a Save As box is sitting on Gianni's screen — so the guard
+    has to be structural, not remembered when each branch is written.
+
+    QSAVE is deliberately not in MODAL_COMMANDS: it only raises a dialog on a
+    drawing that has never been saved, so the check would be conditional on
+    document state rather than on the source. That case is tracked separately.
+    """
+
+    MODAL_COMMANDS = ['"_.SAVEAS"', '"_.OPEN"']
+
+    def _branches_needing_a_guard(self):
+        text = source(DISPATCH_LSP)
+        for name in re.findall(r'\(\(= cmd-name "([^"]+)"\)', text):
+            body = _dispatch_branch(text, name)
+            if any(cmd in body for cmd in self.MODAL_COMMANDS):
+                yield name, body
+
+    def test_there_are_branches_to_check(self):
+        """Guards against the regex quietly matching nothing and the two tests
+        below passing over an empty set."""
+        found = {name for name, _ in self._branches_needing_a_guard()}
+        assert {"drawing-save", "drawing-save-as-dxf", "drawing-open"} <= found
+
+    def test_every_modal_command_is_preceded_by_filedia_0(self):
+        for name, body in self._branches_needing_a_guard():
+            guard = body.find('(setvar "FILEDIA" 0)')
+            first_modal = min(
+                body.find(cmd) for cmd in self.MODAL_COMMANDS if cmd in body
+            )
+            assert guard != -1, f'{name} issues a modal command with no FILEDIA guard'
+            assert guard < first_modal, f"{name} sets FILEDIA 0 after the dialog would open"
+
+    def test_every_guard_is_closed(self):
+        for name, body in self._branches_needing_a_guard():
+            assert body.count('(setvar "FILEDIA"') >= 2, (
+                f"{name} sets FILEDIA 0 and never puts it back"
+            )
+
+
+class TestDxfExportIsHonestAboutTheRename:
+    """SAVEAS renames the active document to the .dxf; LT has no COM and
+    EXPORT has no DXF format, so there is no writer that does not. The rename
+    is therefore reported rather than prevented — the failure it guards against
+    is a later QSAVE writing DXF over a drawing whose name nobody noticed had
+    changed."""
+
+    def body(self) -> str:
+        return _dispatch_branch(source(DISPATCH_LSP), "drawing-save-as-dxf")
+
+    def test_reports_the_document_name_it_ended_on(self):
+        body = self.body()
+        assert '\\"document\\"' in body and '(getvar "DWGNAME")' in body
+
+    def test_the_rename_flag_is_measured_not_asserted(self):
+        """A hardcoded "renamed": true is a claim about AutoCAD's behaviour.
+        Comparing DWGNAME either side of the SAVEAS is an observation of it."""
+        body = self.body()
+        assert body.count('(getvar "DWGNAME")') == 2, (
+            "renamed must come from DWGNAME before vs after, not a literal"
+        )
+        assert '(if (= dwg-before dwg-after) "false" "true")' in body
+
+    def test_restores_the_filedia_it_found(self):
+        """Hardcoding 1 turns a caller who had dialogs off into a caller who
+        has them on — the neighbouring branches still do this."""
+        body = self.body()
+        assert '(setq filedia (getvar "FILEDIA"))' in body
+        assert '(setvar "FILEDIA" filedia)' in body
+
+    def test_rejects_an_empty_path(self):
+        """SAVEAS with an empty string prompts for one, which is the hang the
+        FILEDIA guard exists to prevent, arriving by another route."""
+        assert '(> (strlen path) 0)' in self.body()
+
+    def test_escapes_the_path_into_the_payload(self):
+        """A Windows path lands here with backslashes; unescaped they make the
+        result file unparseable JSON and the call fails after the work is done."""
+        assert '(mcp-escape-string path)' in self.body()
+
+
+def _dispatch_branch(text: str, cmd_name: str) -> str:
+    """Source of one branch of mcp-dispatch-command's cond, by paren matching."""
+    start = text.index(f'((= cmd-name "{cmd_name}")')
+    stripped = strip_lisp(text)
+    depth = 0
+    for i in range(start, len(text)):
+        ch = stripped[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise AssertionError(f"{cmd_name} branch is not closed")
+
+
 def _defun_body(text: str, name: str) -> str:
     """Source of one defun, by paren matching."""
     start = text.index(f"(defun {name} ")

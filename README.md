@@ -237,6 +237,7 @@ The `mcp_dispatch.lsp` dispatcher is fully compatible with LT 2024+.
 - **Drawing open** — Open existing `.dwg` files programmatically (FILEDIA suppressed).
 - **Drawing create** — Now resets current drawing (erase all + purge) instead of `_.NEW`, preserving the LISP dispatcher namespace.
 - **Drawing save with path** — `save` with a `path` parameter uses SAVEAS; without path uses QSAVE.
+- **`save_as_dxf` renames the active drawing** — SAVEAS is the only DXF writer LT exposes (no COM, and EXPORT has no DXF format), and renaming the current document to the target is intrinsic to it. The result payload reports `document` and `renamed` so this is visible; after an export, a bare `save` (QSAVE) writes **DXF**, not DWG. FILEDIA suppressed.
 - **`get_variables` fix** — Respects the `names` parameter; returns requested variables with proper type handling.
 - **Polyline/leader fix** — Point arrays properly encoded via semicolon-delimited format.
 - **ESC prefix** — Sends 2x ESC before each dispatch to cancel stale pending commands from prior timeouts.
