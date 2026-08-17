@@ -221,7 +221,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result filedia dwg-before dwg-after doc-before doc-after dbmod)
+(defun mcp-dispatch-command (cmd-name params-json / result filedia dxf-before dxf-after doc-before doc-after dbmod)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (cond
     ;; --- Ping ---
@@ -448,28 +448,55 @@
        (setq path (mcp-json-get-string params-json "path"))
        (if (and path (> (strlen path) 0))
          (progn
-           ;; SAVEAS is the only DXF writer LT exposes: there is no COM, and
-           ;; EXPORT's format list has no DXF. So this renames the active
-           ;; document to the .dxf — an intrinsic property of SAVEAS, not
-           ;; something a flag turns off. Undoing the rename would take a second
-           ;; SAVEAS back to the .dwg, i.e. rewriting a drawing the caller only
-           ;; asked to export. The rename is reported instead, measured rather
-           ;; than asserted, so the caller learns it here and not from a later
-           ;; QSAVE quietly writing DXF over their drawing.
-           (setq dwg-before (getvar "DWGNAME"))
+           ;; DXFOUT, not SAVEAS with a "DXF" format keyword. That spelling
+           ;; wrote nothing at all — confirmed live against LT 2027, ok: true
+           ;; came back with no file anywhere on disk — and it also renamed the
+           ;; active document to the .dxf, so a later bare QSAVE wrote DXF over
+           ;; the drawing. DXFOUT writes the file and leaves the document
+           ;; alone, which removes the hazard rather than reporting it.
+           ;;
+           ;; "16" answers the decimal-places-of-accuracy prompt. Unlike SAVEAS,
+           ;; DXFOUT replaces an existing file without asking, so there is no
+           ;; overwrite confirmation to send after it.
+           (setq dxf-before (vl-file-systime path))
            ;; Without this, FILEDIA 1 raises a modal Save dialog and the
            ;; dispatcher hangs for the whole 10 s IPC window. Restores the value
            ;; it found, not a hardcoded 1.
            (setq filedia (getvar "FILEDIA"))
            (setvar "FILEDIA" 0)
-           (command "_.SAVEAS" "DXF" path)
+           ;; Caught for the same reason as drawing-save, and applied through
+           ;; vl-cmdf because command cannot be applied at all.
+           (vl-catch-all-apply 'vl-cmdf (list "_.DXFOUT" path "16"))
+           (command)   ; clear anything a refused DXFOUT left at the prompt
            (setvar "FILEDIA" filedia)
-           (setq dwg-after (getvar "DWGNAME"))
-           (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
-                           "\", \"document\": \"" (mcp-escape-string dwg-after)
-                           "\", \"renamed\": "
-                           (if (= dwg-before dwg-after) "false" "true")
-                           "}")))
+           (setq dxf-after (vl-file-systime path))
+           ;; The file is the only evidence available. DXFOUT reports nothing on
+           ;; failure: pointed at a folder that does not exist it returns without
+           ;; error, leaves CMDACTIVE at 0, and writes no file — so neither a
+           ;; caught error nor a return value can be the gate.
+           ;;
+           ;; Existence alone will not do either. A caller re-exporting over
+           ;; last week's DXF would find the stale file still sitting there and
+           ;; be told the export that just failed had succeeded — the exact
+           ;; false success this branch exists to stop. So the timestamp has to
+           ;; move as well. vl-file-systime resolves to the millisecond, and
+           ;; writing the DXF of any real drawing takes far longer than one.
+           (if (and dxf-after (not (equal dxf-before dxf-after)))
+             (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                             "\", \"document\": \""
+                             (mcp-escape-string (mcp-active-document-path))
+                             "\", \"exported\": true}"))
+             ;; mcp-write-result escapes error text itself; escaping again
+             ;; here would double every backslash in the path.
+             (cons nil (strcat
+                        "DXFOUT did not write " path
+                        ": the file on disk did not change. The drawing itself"
+                        " is untouched — DXFOUT exports without renaming the"
+                        " document, so nothing was lost. Check that the folder"
+                        " exists and that the file is not open or read-only"
+                        " elsewhere. A path given without a .dxf extension also"
+                        " lands here: DXFOUT appends one, so the file it writes"
+                        " is not spelled the way the call asked for it."))))
          (cons nil "Save path required"))))
 
     ((= cmd-name "drawing-purge")

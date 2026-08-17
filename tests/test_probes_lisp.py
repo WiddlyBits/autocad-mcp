@@ -464,7 +464,7 @@ class TestFileDialogsAreSuppressed:
     ::test_refuses_to_qsave_a_drawing_that_has_never_been_saved pins.
     """
 
-    MODAL_COMMANDS = ['"_.SAVEAS"', '"_.OPEN"']
+    MODAL_COMMANDS = ['"_.SAVEAS"', '"_.OPEN"', '"_.DXFOUT"']
 
     def _branches_needing_a_guard(self):
         text = source(DISPATCH_LSP)
@@ -495,28 +495,55 @@ class TestFileDialogsAreSuppressed:
             )
 
 
-class TestDxfExportIsHonestAboutTheRename:
-    """SAVEAS renames the active document to the .dxf; LT has no COM and
-    EXPORT has no DXF format, so there is no writer that does not. The rename
-    is therefore reported rather than prevented — the failure it guards against
-    is a later QSAVE writing DXF over a drawing whose name nobody noticed had
-    changed."""
+class TestDxfExportIsVerified:
+    """The DXF branch has no return value and no exception to work from.
+
+    SAVEAS with a "DXF" format keyword wrote nothing whatsoever on LT 2027
+    while returning ok: true, and it renamed the active document on the
+    occasions it did anything, so a later bare QSAVE wrote DXF over the
+    drawing. DXFOUT replaces it: it writes the file and leaves the document
+    alone.
+
+    What it does not do is report. Pointed at a folder that does not exist it
+    returns without error and leaves CMDACTIVE at 0, so the file it did or did
+    not write is the only thing left to look at.
+    """
 
     def body(self) -> str:
         return _dispatch_branch(source(DISPATCH_LSP), "drawing-save-as-dxf")
 
-    def test_reports_the_document_name_it_ended_on(self):
+    def test_exports_with_dxfout_not_saveas(self):
+        """SAVEAS "DXF" wrote no file and renamed the document; both are
+        properties of the command, not of how it was called."""
         body = self.body()
-        assert '\\"document\\"' in body and '(getvar "DWGNAME")' in body
-
-    def test_the_rename_flag_is_measured_not_asserted(self):
-        """A hardcoded "renamed": true is a claim about AutoCAD's behaviour.
-        Comparing DWGNAME either side of the SAVEAS is an observation of it."""
-        body = self.body()
-        assert body.count('(getvar "DWGNAME")') == 2, (
-            "renamed must come from DWGNAME before vs after, not a literal"
+        assert '"_.DXFOUT"' in body
+        assert '"_.SAVEAS"' not in body, (
+            "SAVEAS exports no DXF here and renames the active document"
         )
-        assert '(if (= dwg-before dwg-after) "false" "true")' in body
+
+    def test_the_export_is_gated_on_the_file_changing(self):
+        """Not on existence: re-exporting over a stale DXF would find the old
+        file still there and call the failed export a success."""
+        body = self.body()
+        assert body.count("(vl-file-systime path)") == 2, (
+            "the file must be timestamped either side of the export"
+        )
+        assert "(if (and dxf-after (not (equal dxf-before dxf-after)))" in body
+
+    def test_reports_failure_rather_than_succeeding_either_way(self):
+        """The defect this whole branch family was written for: a success
+        payload returned without looking at anything."""
+        body = self.body()
+        assert "(cons nil" in body[body.index('"_.DXFOUT"') :], (
+            "the export reports success whether or not it wrote anything"
+        )
+
+    def test_does_not_claim_a_rename_it_no_longer_causes(self):
+        """DXFOUT leaves the document alone — verified live, DWGNAME unchanged
+        across a 17 MB export. A "renamed" field here would be a leftover."""
+        body = self.body()
+        assert '\\"renamed\\"' not in body, "the payload still carries a rename flag"
+        assert '(getvar "DWGNAME")' not in body
 
     def test_restores_the_filedia_it_found(self):
         """Hardcoding 1 turns a caller who had dialogs off into a caller who
@@ -524,6 +551,12 @@ class TestDxfExportIsHonestAboutTheRename:
         body = self.body()
         assert '(setq filedia (getvar "FILEDIA"))' in body
         assert '(setvar "FILEDIA" filedia)' in body
+
+    def test_applies_the_command_through_vl_cmdf(self):
+        """command is a special subr; vl-catch-all-apply rejects it outright
+        with "bad order function", throwing the error the guard was to catch."""
+        body = self.body()
+        assert "(vl-catch-all-apply 'vl-cmdf (list \"_.DXFOUT\"" in body
 
     def test_rejects_an_empty_path(self):
         """SAVEAS with an empty string prompts for one, which is the hang the
