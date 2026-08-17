@@ -221,7 +221,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result filedia dxf-before dxf-after doc-before doc-after dbmod)
+(defun mcp-dispatch-command (cmd-name params-json / result path filedia dxf-before dxf-after doc-before doc-after dbmod)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (cond
     ;; --- Ping ---
