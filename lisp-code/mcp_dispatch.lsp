@@ -375,7 +375,12 @@
            ;; SAVEAS would skip the restore below and leave FILEDIA at 0 for
            ;; the rest of the AutoCAD session, silently suppressing every file
            ;; dialog Gianni opens by hand afterwards.
-           (vl-catch-all-apply 'command (list "_.SAVEAS" "" path))
+           ;; vl-cmdf, not command: command is a special subr that cannot be
+           ;; applied, and vl-catch-all-apply rejects it with "bad order
+           ;; function: COMMAND" before it ever enters the protected region —
+           ;; so the guard threw the error it was written to catch. vl-cmdf is
+           ;; the applyable twin and is present in LT 2027.
+           (vl-catch-all-apply 'vl-cmdf (list "_.SAVEAS" "" path))
            (command)   ; clear anything a refused SAVEAS left at the prompt
            (setvar "FILEDIA" filedia)
            (setq doc-after (mcp-active-document-path))
@@ -447,7 +452,7 @@
            (setvar "FILEDIA" 0)
            ;; Caught for the same reason as in drawing-save: an error unwinding
            ;; out of SAVEAS would leave FILEDIA at 0 for the session.
-           (vl-catch-all-apply 'command (list "_.SAVEAS" "DXF" path))
+           (vl-catch-all-apply 'vl-cmdf (list "_.SAVEAS" "DXF" path))
            (command)   ; clear anything a refused SAVEAS left at the prompt
            (setvar "FILEDIA" filedia)
            (setq dwg-after (getvar "DWGNAME"))
@@ -507,7 +512,7 @@
                ;; it, so reaching the next line already means nothing switched.
                (setq filedia (getvar "FILEDIA"))
                (setvar "FILEDIA" 0)
-               (vl-catch-all-apply 'command (list "_.OPEN" path))
+               (vl-catch-all-apply 'vl-cmdf (list "_.OPEN" path))
                (command)   ; clear whatever the refused OPEN left at the prompt
                (setvar "FILEDIA" filedia)
                (setq doc-after (mcp-active-document-path))

@@ -765,7 +765,7 @@ class TestSavesAreVerified:
         for name, body in self._branches_that_save():
             if '"_.SAVEAS"' not in body:
                 continue
-            assert "(vl-catch-all-apply 'command (list \"_.SAVEAS\"" in body, (
+            assert "(vl-catch-all-apply 'vl-cmdf (list \"_.SAVEAS\"" in body, (
                 f"{name} lets a SAVEAS error unwind past the FILEDIA restore"
             )
 
