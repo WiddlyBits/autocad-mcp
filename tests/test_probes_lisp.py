@@ -534,6 +534,161 @@ class TestDxfExportIsHonestAboutTheRename:
         assert '(mcp-escape-string path)' in self.body()
 
 
+class TestDocumentSwitchesAreVerified:
+    """(command ...) has no return value, so a branch that issues one can only
+    report what it asked for. For the commands that change which document is
+    active, what AutoCAD actually does is nothing: OPEN, NEW and CLOSE tear
+    down the document whose LISP namespace is executing, and AutoCAD refuses
+    them from inside (command ...). LT has no COM to fall back on.
+
+    drawing-open returned {"ok": true, "payload": "opened: <path>"} for a call
+    that opened nothing — confirmed against LT 2027, DWGNAME unchanged and no
+    new tab. mcp-cmd-drawing-create had already found the same wall for _.NEW
+    and worked around it; this branch had not.
+
+    The guard is structural rather than remembered because the next branch that
+    reaches for one of these commands will have the same nothing to check.
+    """
+
+    SWITCHING_COMMANDS = ['"_.OPEN"', '"_.NEW"', '"_.CLOSE"', '"_.QUIT"']
+
+    def _branches_that_switch(self):
+        text = source(DISPATCH_LSP)
+        for name in re.findall(r'\(\(= cmd-name "([^"]+)"\)', text):
+            body = _dispatch_branch(text, name)
+            if any(cmd in body for cmd in self.SWITCHING_COMMANDS):
+                yield name, body
+
+    def _last_switch(self, body: str) -> int:
+        return max(body.rfind(cmd) for cmd in self.SWITCHING_COMMANDS)
+
+    def test_there_are_branches_to_check(self):
+        """Guards against the regex quietly matching nothing and the tests
+        below passing over an empty set."""
+        assert {"drawing-open"} <= {name for name, _ in self._branches_that_switch()}
+
+    def test_the_document_is_measured_after_the_command(self):
+        for name, body in self._branches_that_switch():
+            assert body.rfind("(mcp-active-document-path)") > self._last_switch(body), (
+                f"{name} never looks at which document it ended up in"
+            )
+
+    def test_every_success_is_gated_on_the_comparison(self):
+        """A (cons T ...) that no comparison stands in front of is the original
+        defect verbatim, whatever the payload says."""
+        for name, body in self._branches_that_switch():
+            for hit in re.finditer(r"\(cons T", body):
+                assert "(mcp-same-drawing" in body[: hit.start()], (
+                    f"{name} reports success without comparing documents first"
+                )
+
+    def test_a_failed_switch_is_reported_as_a_failure(self):
+        """Asserted against the comparison's own else-arm rather than against
+        "a (cons nil somewhere after the command", which the argument-
+        validation arm every branch already has would satisfy on its own."""
+        for name, body in self._branches_that_switch():
+            guard = _form_at(body, body.rindex("(if (mcp-same-drawing"))
+            assert "(cons nil" in guard, (
+                f"{name} compares documents and then reports success either "
+                f"way, so it can only report the switch it asked for"
+            )
+
+
+class TestOpenIsHonestAboutNotSwitching:
+    """What the verified branch says when it comes back."""
+
+    def body(self) -> str:
+        return _dispatch_branch(source(DISPATCH_LSP), "drawing-open")
+
+    def mismatch_error(self) -> str:
+        """The (cons nil ...) returned when the comparison fails — not the one
+        that rejects a missing path, which sits last in the source."""
+        body = self.body()
+        return _form_at(body, body.index("(cons nil", body.index('"_.OPEN"')))
+
+    def test_reports_the_document_it_is_actually_in(self):
+        assert '\\"document\\"' in self.body()
+
+    def test_both_outcomes_of_the_switch_flag_exist(self):
+        """"switched": false is the already-open case and true the one that
+        would need OPEN to have worked. A branch carrying only one of them is
+        asserting an outcome rather than reporting it."""
+        body = self.body()
+        assert '\\"switched\\": false' in body and '\\"switched\\": true' in body
+
+    def test_already_open_succeeds_without_issuing_the_command(self):
+        """Opening the document you are already in is the one thing this branch
+        can honestly succeed at, and it must not need OPEN to do it."""
+        body = self.body()
+        assert body.find("(cons T") < body.find('"_.OPEN"')
+
+    def test_the_error_names_the_document_it_is_still_in(self):
+        """"OPEN failed" sends you looking at the file. Naming the document you
+        are still in says the drawing you were working on is untouched."""
+        assert "doc-after" in self.mismatch_error()
+
+    def test_the_error_is_not_escaped_twice(self):
+        """mcp-write-result escapes error text on the way out; escaping here as
+        well doubles every backslash in the path the caller has to read."""
+        assert "mcp-escape-string" not in self.mismatch_error()
+
+    def test_restores_the_filedia_it_found(self):
+        body = self.body()
+        assert '(setq filedia (getvar "FILEDIA"))' in body
+        assert '(setvar "FILEDIA" filedia)' in body
+
+    def test_rejects_an_empty_path(self):
+        """An empty path made the old branch prompt for one behind FILEDIA 0,
+        which is the 10 s hang by another route."""
+        assert "(> (strlen path) 0)" in self.body()
+
+    def test_the_refused_command_does_not_leave_input_at_the_prompt(self):
+        """When OPEN is refused its path argument is still typed, and lands at
+        the Command: prompt for the next dispatch to inherit."""
+        body = self.body()
+        assert "(command)" in body[body.find('"_.OPEN"') :]
+
+
+class TestPathComparisonCannotMatchByAccident:
+    """The comparison is the whole fix; a sloppy one restores the false
+    success it replaced."""
+
+    def test_normalizes_separator_and_case(self):
+        """C:\\Temp\\x.dwg and c:/temp/x.dwg are one file to Windows and two
+        strings to (= ...). DWGPREFIX always answers in backslashes."""
+        body = _defun_body(source(DISPATCH_LSP), "mcp-normalize-path")
+        assert "(strcase" in body and '"\\\\"' in body
+
+    def test_the_active_path_is_folder_plus_name(self):
+        """DWGNAME alone compares equal to a same-named drawing in any other
+        folder — exactly the coincidence this check exists to rule out."""
+        body = _defun_body(source(DISPATCH_LSP), "mcp-active-document-path")
+        assert '(getvar "DWGNAME")' in body and '(getvar "DWGPREFIX")' in body
+
+    def test_a_bare_name_is_not_compared_against_a_full_path(self):
+        """Otherwise a caller who passes "panel.dwg" never matches, and the
+        branch reports a failure on a document that is in fact the right one."""
+        body = _defun_body(source(DISPATCH_LSP), "mcp-same-drawing")
+        assert "mcp-path-basename" in body
+
+
+def _form_at(text: str, start: int) -> str:
+    """Source of the parenthesised form that begins at start, by paren
+    matching. Lets an assertion name one arm of one `if` rather than a slice
+    of a branch that happens to contain the right words."""
+    stripped = strip_lisp(text)
+    depth = 0
+    for i in range(start, len(text)):
+        ch = stripped[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise AssertionError(f"form at offset {start} is not closed")
+
+
 def _dispatch_branch(text: str, cmd_name: str) -> str:
     """Source of one branch of mcp-dispatch-command's cond, by paren matching."""
     start = text.index(f'((= cmd-name "{cmd_name}")')

@@ -96,7 +96,7 @@ You should see `backend: "file_ipc"` if AutoCAD is running, or `backend: "ezdxf"
 | Operation | Description | File IPC | ezdxf |
 |-----------|-------------|----------|-------|
 | `create` | Reset to clean drawing (erase all + purge) | Yes | Yes |
-| `open` | Open an existing drawing | Yes | Yes (DXF) |
+| `open` | Open an existing drawing | No — see below | Yes (DXF) |
 | `info` | Get entity count and layers | Yes | Yes |
 | `save` | Save current drawing (to path if given) | Yes | Yes |
 | `save_as_dxf` | Export as DXF | Yes | Yes |
@@ -234,7 +234,7 @@ The `mcp_dispatch.lsp` dispatcher is fully compatible with LT 2024+.
 
 - **`execute_lisp`** — Run arbitrary AutoLISP code via temp file pattern. Turns the server from a fixed command set into an extensible automation platform.
 - **Undo / Redo** — Single-step undo and redo via `drawing` tool.
-- **Drawing open** — Open existing `.dwg` files programmatically (FILEDIA suppressed).
+- **Drawing open** — ~~Open existing `.dwg` files programmatically~~ **This did not work.** AutoCAD refuses OPEN from inside `(command ...)` for the same reason `drawing create` cannot use `_.NEW`: it would tear down the document whose LISP namespace is running the dispatcher. `(command ...)` returns no status, so the branch reported `{"ok": true, "payload": "opened: <path>"}` while opening nothing — confirmed against LT 2027, `DWGNAME` unchanged and no new tab. The branch now compares the active document against the requested path and returns `ok: false` naming the document it is still in. It succeeds only when the file is *already* the active document, which makes it a cheap way to confirm which document you are in. To actually change documents, open the file from the AutoCAD UI and load `mcp_dispatch.lsp` in it, or use the ezdxf backend to read the file without AutoCAD.
 - **Drawing create** — Now resets current drawing (erase all + purge) instead of `_.NEW`, preserving the LISP dispatcher namespace.
 - **Drawing save with path** — `save` with a `path` parameter uses SAVEAS; without path uses QSAVE.
 - **`save_as_dxf` renames the active drawing** — SAVEAS is the only DXF writer LT exposes (no COM, and EXPORT has no DXF format), and renaming the current document to the target is intrinsic to it. The result payload reports `document` and `renamed` so this is visible; after an export, a bare `save` (QSAVE) writes **DXF**, not DWG. FILEDIA suppressed.

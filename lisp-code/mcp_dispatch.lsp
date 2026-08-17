@@ -64,6 +64,60 @@
   result
 )
 
+;; -----------------------------------------------------------------------
+;; Path comparison — for checking that a file operation landed where it said
+;; -----------------------------------------------------------------------
+
+(defun mcp-normalize-path (p / out i ch)
+  "One canonical spelling of a path: forward slashes, lower case.
+   Windows treats \\ and / and either case as the same file; (= ...) does not.
+   DWGPREFIX comes back with backslashes whatever the caller wrote, so a
+   comparison against it needs both spellings collapsed first."
+  (if (null p) (setq p ""))
+  (setq out "" i 1)
+  (while (<= i (strlen p))
+    (setq ch (substr p i 1))
+    (setq out (strcat out (if (= ch "\\") "/" ch)))
+    (setq i (1+ i))
+  )
+  (strcase out T)
+)
+
+(defun mcp-path-basename (p / norm pos)
+  "The file name at the end of a path, normalized."
+  (setq norm (mcp-normalize-path p))
+  (while (setq pos (vl-string-search "/" norm))
+    (setq norm (substr norm (+ pos 2)))
+  )
+  norm
+)
+
+(defun mcp-active-document-path ( / name prefix)
+  "Full path of the document this dispatcher is running in.
+   DWGNAME is the file name and DWGPREFIX its folder. Both are needed: DWGNAME
+   alone would compare equal to a same-named drawing in any other folder, which
+   is the coincidence a verification step exists to rule out."
+  (setq name (mcp-normalize-path (getvar "DWGNAME")))
+  (setq prefix (mcp-normalize-path (getvar "DWGPREFIX")))
+  (if (vl-string-search "/" name)
+    name                          ; already a full path in some configurations
+    (strcat prefix name)
+  )
+)
+
+(defun mcp-same-drawing (want actual / w a)
+  "True when `want` names the drawing at `actual`.
+   A bare file name is compared by name, a path in full. Anything it cannot
+   prove equal it calls different — reporting a failure that did not happen is
+   recoverable, reporting a success that did not is what this file is fixing."
+  (setq w (mcp-normalize-path want))
+  (setq a (mcp-normalize-path actual))
+  (if (vl-string-search "/" w)
+    (= w a)
+    (= w (mcp-path-basename a))
+  )
+)
+
 (defun mcp-read-file-lines (filepath / fp line lines)
   "Read all lines from a file into a single string."
   (setq fp (open filepath "r"))
@@ -167,7 +221,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result filedia dwg-before dwg-after)
+(defun mcp-dispatch-command (cmd-name params-json / result filedia dwg-before dwg-after doc-before doc-after)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (cond
     ;; --- Ping ---
@@ -345,12 +399,55 @@
     ((= cmd-name "drawing-open")
      (progn
        (setq path (mcp-json-get-string params-json "path"))
-       (if path
+       (if (and path (> (strlen path) 0))
          (progn
-           (setvar "FILEDIA" 0)
-           (command "_.OPEN" path)
-           (setvar "FILEDIA" 1)
-           (cons T (strcat "\"opened: " (mcp-escape-string path) "\"")))
+           (setq doc-before (mcp-active-document-path))
+           (if (mcp-same-drawing path doc-before)
+             ;; Already the active document. Nothing for OPEN to do, and this
+             ;; is the one success this branch can honestly report.
+             (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                             "\", \"document\": \"" (mcp-escape-string doc-before)
+                             "\", \"switched\": false}"))
+             (progn
+               ;; OPEN tears down the document whose LISP namespace is running
+               ;; this dispatcher, and AutoCAD will not do that from inside
+               ;; (command ...) — the command is ignored. (command ...) returns
+               ;; nothing either way, which is how the unconditional
+               ;; "opened: <path>" that used to sit here reported an open that
+               ;; never happened: confirmed against LT 2027, DWGNAME unchanged
+               ;; and no new tab. Same reason mcp-cmd-drawing-create refuses to
+               ;; use _.NEW.
+               ;;
+               ;; The attempt is still made rather than replaced by a flat
+               ;; refusal, because a refusal is a claim about AutoCAD's
+               ;; behaviour and the comparison below is an observation of it.
+               ;; Note that an OPEN that did work would take this document —
+               ;; and this dispatcher, before it writes a result — down with
+               ;; it, so reaching the next line already means nothing switched.
+               (setq filedia (getvar "FILEDIA"))
+               (setvar "FILEDIA" 0)
+               (vl-catch-all-apply 'command (list "_.OPEN" path))
+               (command)   ; clear whatever the refused OPEN left at the prompt
+               (setvar "FILEDIA" filedia)
+               (setq doc-after (mcp-active-document-path))
+               (if (mcp-same-drawing path doc-after)
+                 (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                                 "\", \"document\": \"" (mcp-escape-string doc-after)
+                                 "\", \"switched\": true}"))
+                 ;; mcp-write-result escapes error text itself; escaping again
+                 ;; here would double every backslash in the path.
+                 (cons nil (strcat
+                            "OPEN did not switch documents: still in "
+                            doc-after ", not " path
+                            ". AutoCAD refuses OPEN/NEW/CLOSE from AutoLISP and"
+                            " LT has no COM alternative, so the file_ipc backend"
+                            " cannot change documents. Open the file from the"
+                            " AutoCAD UI and load mcp_dispatch.lsp in it, or use"
+                            " the ezdxf backend to read the file without AutoCAD."))
+               )
+             )
+           )
+         )
          (cons nil "Path required"))))
 
     ;; --- P&ID ---

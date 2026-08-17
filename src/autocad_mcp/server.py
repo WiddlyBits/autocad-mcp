@@ -66,6 +66,11 @@ async def drawing(
     Operations:
       create     — Create a new empty drawing. data: {name?}
       open       — Open an existing drawing. data: {path}
+                    On the AutoCAD backend this cannot switch documents:
+                    AutoCAD refuses OPEN from AutoLISP and LT has no COM, so
+                    it succeeds only when the file is already the active
+                    document and reports a failure naming the document it is
+                    still in otherwise. Open the file from the AutoCAD UI.
       info       — entity_count, layers, and extents {min:[x,y], max:[x,y]}
                     (null when the drawing is empty). The cheapest way to
                     confirm which document you are in and whether an edit
