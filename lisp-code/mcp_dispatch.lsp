@@ -221,7 +221,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result filedia dwg-before dwg-after doc-before doc-after)
+(defun mcp-dispatch-command (cmd-name params-json / result filedia dwg-before dwg-after doc-before doc-after dbmod)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (cond
     ;; --- Ping ---
@@ -357,11 +357,74 @@
        (setq path (mcp-json-get-string params-json "path"))
        (if (and path (> (strlen path) 0))
          (progn
+           ;; Unlike OPEN, SAVEAS does work from AutoLISP — it writes the file
+           ;; and renames the active document to it. That rename is what makes
+           ;; this branch checkable: the document we end up in *is* the file
+           ;; that was written, so comparing it against what was asked for is
+           ;; an observation of the save rather than a claim about it.
+           ;;
+           ;; It needs to be, because (command ...) returns nothing whether
+           ;; SAVEAS wrote the file, hit a read-only path, or was refused. The
+           ;; unconditional "saved to: <path>" that used to sit here reported
+           ;; the path it was handed either way — confirmed live, ok: true came
+           ;; back from a SAVEAS that had failed with the original document
+           ;; still active.
+           (setq filedia (getvar "FILEDIA"))
            (setvar "FILEDIA" 0)
-           (command "_.SAVEAS" "" path)
-           (setvar "FILEDIA" 1)
-           (cons T (strcat "\"saved to: " (mcp-escape-string path) "\"")))
-         (progn (command "_.QSAVE") (cons T "\"saved\"")))))
+           ;; Caught rather than allowed to unwind: an error thrown out of
+           ;; SAVEAS would skip the restore below and leave FILEDIA at 0 for
+           ;; the rest of the AutoCAD session, silently suppressing every file
+           ;; dialog Gianni opens by hand afterwards.
+           (vl-catch-all-apply 'command (list "_.SAVEAS" "" path))
+           (command)   ; clear anything a refused SAVEAS left at the prompt
+           (setvar "FILEDIA" filedia)
+           (setq doc-after (mcp-active-document-path))
+           (if (mcp-same-drawing path doc-after)
+             (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                             "\", \"document\": \"" (mcp-escape-string doc-after)
+                             "\", \"saved\": true}"))
+             ;; mcp-write-result escapes error text itself; escaping again
+             ;; here would double every backslash in the path.
+             (cons nil (strcat
+                        "SAVEAS did not save to " path
+                        ": the active document is still " doc-after
+                        ". Nothing was written to the requested path, and the"
+                        " drawing you were working on is untouched. Check that"
+                        " the folder exists and that the file is not open or"
+                        " read-only elsewhere. A path given without a .dwg"
+                        " extension also lands here: SAVEAS appends one, so"
+                        " the document it leaves you in is not spelled the way"
+                        " the call asked for it."))))
+         ;; No path: QSAVE writes back over the file the document came from,
+         ;; so there is no rename to compare against and the check has to come
+         ;; from somewhere else. DBMOD is that somewhere — AutoCAD clears it to
+         ;; 0 when a save succeeds and leaves it non-zero while the drawing
+         ;; still holds changes that are not on disk.
+         (if (= (getvar "DWGTITLED") 0)
+           ;; A drawing that has never been saved has no file for QSAVE to
+           ;; write back to, so QSAVE becomes SAVEAS and asks for a name: a
+           ;; modal dialog under FILEDIA 1, a command-line prompt under 0.
+           ;; Either one sits there until the 10 s IPC window times out and the
+           ;; caller learns nothing. Refusing is instant and says what to do.
+           (cons nil (strcat "This drawing has never been saved, so there is no"
+                             " file to save it back to. Pass a path to save it"
+                             " as a new file."))
+           (progn
+             (command "_.QSAVE")
+             ;; Read before touching any other system variable, so nothing
+             ;; between the save and the measurement can move DBMOD.
+             (setq dbmod (getvar "DBMOD"))
+             (setq doc-after (mcp-active-document-path))
+             (if (= dbmod 0)
+               (cons T (strcat "{\"path\": \"" (mcp-escape-string doc-after)
+                               "\", \"document\": \"" (mcp-escape-string doc-after)
+                               "\", \"saved\": true}"))
+               (cons nil (strcat
+                          "QSAVE did not save " doc-after
+                          ": the drawing still holds unsaved changes (DBMOD "
+                          (itoa dbmod) ", 0 is what a save leaves behind)."
+                          " The file on disk is older than what is on screen."
+                          " Check that it is not read-only or open elsewhere."))))))))
 
     ((= cmd-name "drawing-save-as-dxf")
      (progn

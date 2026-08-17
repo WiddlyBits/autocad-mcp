@@ -459,7 +459,9 @@ class TestFileDialogsAreSuppressed:
 
     QSAVE is deliberately not in MODAL_COMMANDS: it only raises a dialog on a
     drawing that has never been saved, so the check would be conditional on
-    document state rather than on the source. That case is tracked separately.
+    document state rather than on the source. That case is handled in the
+    branch instead, by the DWGTITLED refusal that TestSaveIsHonestAboutNotSaving
+    ::test_refuses_to_qsave_a_drawing_that_has_never_been_saved pins.
     """
 
     MODAL_COMMANDS = ['"_.SAVEAS"', '"_.OPEN"']
@@ -670,6 +672,93 @@ class TestPathComparisonCannotMatchByAccident:
         branch reports a failure on a document that is in fact the right one."""
         body = _defun_body(source(DISPATCH_LSP), "mcp-same-drawing")
         assert "mcp-path-basename" in body
+
+
+class TestSaveIsHonestAboutNotSaving:
+    """What the verified branch says when it comes back."""
+
+    def body(self) -> str:
+        return _dispatch_branch(source(DISPATCH_LSP), "drawing-save")
+
+    def qsave_arm(self) -> str:
+        """The no-path half, which QSAVEs the document over its own file."""
+        body = self.body()
+        return _form_at(body, body.index('(if (= (getvar "DWGTITLED")'))
+
+    def saveas_arm(self) -> str:
+        """Everything before it: the half handed an explicit path."""
+        body = self.body()
+        return body[: body.index('(if (= (getvar "DWGTITLED")')]
+
+    def mismatch_error(self) -> str:
+        """The (cons nil ...) returned when the document comparison fails —
+        not the one that rejects a missing path."""
+        arm = self.saveas_arm()
+        return _form_at(arm, arm.index("(cons nil", arm.index('"_.SAVEAS"')))
+
+    def test_the_path_form_checks_the_document_it_ended_in(self):
+        """SAVEAS renames the active document to the file it wrote, so the
+        document is the one piece of evidence that the write happened."""
+        arm = self.saveas_arm()
+        assert "(mcp-active-document-path)" in arm
+        assert "(if (mcp-same-drawing path doc-after)" in arm
+
+    def test_the_no_path_form_checks_dbmod(self):
+        """QSAVE leaves no rename to compare, so success is read off the flag
+        AutoCAD clears when a save lands."""
+        arm = self.qsave_arm()
+        assert '(getvar "DBMOD")' in arm and "(if (= dbmod 0)" in arm
+
+    def test_dbmod_is_read_before_anything_else_can_move_it(self):
+        """Any setvar between the save and the measurement puts a second
+        writer in front of the only evidence this arm has."""
+        arm = self.qsave_arm()
+        between = arm[arm.index('(command "_.QSAVE")') : arm.index('(getvar "DBMOD")')]
+        assert "(setvar" not in between
+
+    def test_refuses_to_qsave_a_drawing_that_has_never_been_saved(self):
+        """QSAVE on an untitled drawing turns into SAVEAS and asks for a name:
+        a modal dialog under FILEDIA 1, a command-line prompt under 0. Both sit
+        there for the whole 10 s IPC window and come back as a bare timeout
+        with no hint that AutoCAD is waiting on an answer."""
+        arm = self.qsave_arm()
+        gate = arm.index('(command "_.QSAVE")')
+        assert arm.index('(getvar "DWGTITLED")') < gate
+        assert "(cons nil" in arm[:gate]
+
+    def test_both_arms_name_the_document_rather_than_only_failing(self):
+        """"Save failed" sends you looking at the file. Naming the document
+        says which drawing is and is not on disk."""
+        assert "doc-after" in self.mismatch_error()
+        assert "doc-after" in _form_at(
+            self.qsave_arm(), self.qsave_arm().rindex("(cons nil")
+        )
+
+    def test_the_errors_are_not_escaped_twice(self):
+        """mcp-write-result escapes error text on the way out; escaping here as
+        well doubles every backslash in the path the caller has to read."""
+        assert "mcp-escape-string" not in self.mismatch_error()
+        assert "mcp-escape-string" not in _form_at(
+            self.qsave_arm(), self.qsave_arm().rindex("(cons nil")
+        )
+
+    def test_rejects_an_empty_path(self):
+        """An empty string is not a missing path: it reaches SAVEAS, which
+        prompts for one behind FILEDIA 0 — the same 10 s hang by another
+        route."""
+        assert "(> (strlen path) 0)" in self.body()
+
+    def test_escapes_the_path_into_the_payload(self):
+        """A Windows path lands here with backslashes; unescaped they make the
+        result file unparseable JSON and the call fails after the save."""
+        assert "(mcp-escape-string path)" in self.saveas_arm()
+        assert "(mcp-escape-string doc-after)" in self.qsave_arm()
+
+    def test_the_refused_command_does_not_leave_input_at_the_prompt(self):
+        """When SAVEAS is refused its path argument is still typed, and lands
+        at the Command: prompt for the next dispatch to inherit."""
+        body = self.body()
+        assert "(command)" in body[body.find('"_.SAVEAS"') :]
 
 
 def _form_at(text: str, start: int) -> str:
