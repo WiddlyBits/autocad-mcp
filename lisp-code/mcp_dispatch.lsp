@@ -445,14 +445,32 @@
            ;; it found, not a hardcoded 1.
            (setq filedia (getvar "FILEDIA"))
            (setvar "FILEDIA" 0)
-           (command "_.SAVEAS" "DXF" path)
+           ;; Caught for the same reason as in drawing-save: an error unwinding
+           ;; out of SAVEAS would leave FILEDIA at 0 for the session.
+           (vl-catch-all-apply 'command (list "_.SAVEAS" "DXF" path))
+           (command)   ; clear anything a refused SAVEAS left at the prompt
            (setvar "FILEDIA" filedia)
            (setq dwg-after (getvar "DWGNAME"))
-           (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
-                           "\", \"document\": \"" (mcp-escape-string dwg-after)
-                           "\", \"renamed\": "
-                           (if (= dwg-before dwg-after) "false" "true")
-                           "}")))
+           ;; The rename this branch reports is also the evidence the export
+           ;; happened: SAVEAS leaves the document named after the file it
+           ;; wrote. Reporting the rename while still returning ok unread was
+           ;; the same unconditional success drawing-save carried — the
+           ;; document had to be looked at anyway, so gate on it.
+           (setq doc-after (mcp-active-document-path))
+           (if (mcp-same-drawing path doc-after)
+             (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                             "\", \"document\": \"" (mcp-escape-string dwg-after)
+                             "\", \"renamed\": "
+                             (if (= dwg-before dwg-after) "false" "true")
+                             "}"))
+             (cons nil (strcat
+                        "SAVEAS did not export to " path
+                        ": the active document is still " doc-after
+                        ". No DXF was written. Check that the folder exists and"
+                        " that the file is not open or read-only elsewhere. A"
+                        " path given without a .dxf extension also lands here,"
+                        " because SAVEAS appends one and the document it leaves"
+                        " you in is then not spelled the way the call asked."))))
          (cons nil "Save path required"))))
 
     ((= cmd-name "drawing-purge")

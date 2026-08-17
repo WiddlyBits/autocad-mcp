@@ -674,6 +674,114 @@ class TestPathComparisonCannotMatchByAccident:
         assert "mcp-path-basename" in body
 
 
+class TestSavesAreVerified:
+    """The same defect as drawing-open, on the commands that write files.
+    (command ...) returns nothing, so a save branch that does not look at
+    anything afterwards reports the path it was handed whether SAVEAS wrote it,
+    hit a read-only path, or was refused.
+
+    drawing-save returned {"ok": true, "payload": "saved to: <path>"} for a
+    SAVEAS that had failed with the original document still active — confirmed
+    live, and the reason CLAUDE.md now says a bare ok is not evidence of a save.
+
+    Unlike OPEN, these commands do work from AutoLISP, so there is something
+    real to measure. SAVEAS renames the active document to the file it wrote,
+    which makes the document the evidence; QSAVE writes back over the file the
+    document already came from, leaving no rename, so DBMOD is the evidence
+    there instead. Structural rather than remembered because the next branch
+    that reaches for a save has the same nothing to check.
+    """
+
+    SAVE_COMMANDS = ['"_.SAVEAS"', '"_.QSAVE"']
+
+    # A gate is an `if` whose condition is one of the two measurements above.
+    GATE_RE = r"\(if \((?:mcp-same-drawing|= dbmod )"
+
+    def _branches_that_save(self):
+        text = source(DISPATCH_LSP)
+        for name in re.findall(r'\(\(= cmd-name "([^"]+)"\)', text):
+            body = _dispatch_branch(text, name)
+            if any(cmd in body for cmd in self.SAVE_COMMANDS):
+                yield name, body
+
+    def _last_save(self, body: str) -> int:
+        return max(body.rfind(cmd) for cmd in self.SAVE_COMMANDS)
+
+    def _gates(self, body: str) -> list[int]:
+        return [m.start() for m in re.finditer(self.GATE_RE, body)]
+
+    def test_there_are_branches_to_check(self):
+        """Guards against the regex quietly matching nothing and the tests
+        below passing over an empty set."""
+        found = {name for name, _ in self._branches_that_save()}
+        assert {"drawing-save", "drawing-save-as-dxf"} <= found
+
+    def test_something_is_measured_after_the_command(self):
+        """A branch that stops thinking when the command returns has only the
+        arguments it passed in to report."""
+        for name, body in self._branches_that_save():
+            measured = max(
+                body.rfind("(mcp-active-document-path)"), body.rfind('(getvar "DBMOD")')
+            )
+            assert measured > self._last_save(body), (
+                f"{name} never looks at whether the save landed"
+            )
+
+    def test_every_success_is_gated_on_a_measurement(self):
+        """A (cons T ...) that no measurement stands in front of is the
+        original defect verbatim, whatever the payload says."""
+        for name, body in self._branches_that_save():
+            for hit in re.finditer(r"\(cons T", body):
+                assert re.search(self.GATE_RE, body[: hit.start()]), (
+                    f"{name} reports a save it never checked"
+                )
+
+    def test_there_is_a_gate_for_every_success(self):
+        """The test above only asks that *a* gate precedes each success, which
+        a second arm added later would satisfy off the first arm's gate — the
+        QSAVE arm sits after the SAVEAS arm and would have inherited its
+        comparison for free. One gate per success closes that."""
+        for name, body in self._branches_that_save():
+            assert len(re.findall(r"\(cons T", body)) == len(self._gates(body)), (
+                f"{name} has a success arm with no measurement of its own"
+            )
+
+    def test_a_failed_save_is_reported_as_a_failure(self):
+        """Asserted against each gate's own else-arm rather than against "a
+        (cons nil somewhere after the command", which the argument-validation
+        arm every branch already has would satisfy on its own."""
+        for name, body in self._branches_that_save():
+            for start in self._gates(body):
+                assert "(cons nil" in _form_at(body, start), (
+                    f"{name} measures the save and then reports success either "
+                    f"way, so it can only report the save it asked for"
+                )
+
+    def test_an_error_cannot_leave_the_file_dialogs_suppressed(self):
+        """FILEDIA is restored on the line after SAVEAS, so an error thrown out
+        of SAVEAS skips it and leaves dialogs off for the rest of the AutoCAD
+        session — every file dialog Gianni opens by hand afterwards silently
+        does nothing, long after this call is forgotten."""
+        for name, body in self._branches_that_save():
+            if '"_.SAVEAS"' not in body:
+                continue
+            assert "(vl-catch-all-apply 'command (list \"_.SAVEAS\"" in body, (
+                f"{name} lets a SAVEAS error unwind past the FILEDIA restore"
+            )
+
+    def test_restores_the_filedia_it_found(self):
+        """Hardcoding 1 turns a caller who had dialogs off into a caller who
+        has them on — which is what drawing-save did."""
+        for name, body in self._branches_that_save():
+            if '"_.SAVEAS"' not in body:
+                continue
+            assert '(setq filedia (getvar "FILEDIA"))' in body, name
+            assert '(setvar "FILEDIA" filedia)' in body, name
+            assert '(setvar "FILEDIA" 1)' not in body, (
+                f"{name} restores a hardcoded FILEDIA rather than the one it found"
+            )
+
+
 class TestSaveIsHonestAboutNotSaving:
     """What the verified branch says when it comes back."""
 
