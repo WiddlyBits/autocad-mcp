@@ -703,6 +703,22 @@ class TestSaveIsHonestAboutNotSaving:
         assert "(mcp-active-document-path)" in arm
         assert "(if (mcp-same-drawing path doc-after)" in arm
 
+    def test_the_overwrite_confirmation_is_answered(self):
+        """SAVEAS asks before replacing a file that already exists, and under
+        FILEDIA 0 that arrives as a command-line prompt defaulting to No.
+
+        Left unanswered the save is refused, and this branch then reports a
+        perfectly accurate failure for the most ordinary save there is: writing
+        back over the file you last saved to. Honest, and useless. Confirmed
+        live against LT 2027 both directions — the same SAVEAS refused without
+        the "_Y" and written with it.
+        """
+        arm = self.saveas_arm()
+        assert '(list "_.SAVEAS" "" path "_Y")' in arm, (
+            "the path form leaves SAVEAS's overwrite prompt unanswered, so "
+            "saving over an existing file reports a failure that did not happen"
+        )
+
     def test_the_no_path_form_checks_dbmod(self):
         """QSAVE leaves no rename to compare, so success is read off the flag
         AutoCAD clears when a save lands."""

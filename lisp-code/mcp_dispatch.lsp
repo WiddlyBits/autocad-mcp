@@ -380,7 +380,19 @@
            ;; function: COMMAND" before it ever enters the protected region —
            ;; so the guard threw the error it was written to catch. vl-cmdf is
            ;; the applyable twin and is present in LT 2027.
-           (vl-catch-all-apply 'vl-cmdf (list "_.SAVEAS" "" path))
+           ;; The trailing "_Y" answers the overwrite confirmation SAVEAS raises
+           ;; when the target file already exists. Under FILEDIA 0 that arrives
+           ;; as a command-line prompt defaulting to No, so without an answer
+           ;; the save is refused and the branch below correctly reports a
+           ;; failure — for the most ordinary case there is, saving over the
+           ;; file you last saved to. Confirmed live: the same SAVEAS that was
+           ;; refused went through unchanged once "_Y" followed the path.
+           ;;
+           ;; Sent unconditionally because a path that does not exist yet raises
+           ;; no prompt to consume it, and the extra token is then discarded
+           ;; with the command already complete — verified live, CMDACTIVE 0 and
+           ;; the next call unaffected.
+           (vl-catch-all-apply 'vl-cmdf (list "_.SAVEAS" "" path "_Y"))
            (command)   ; clear anything a refused SAVEAS left at the prompt
            (setvar "FILEDIA" filedia)
            (setq doc-after (mcp-active-document-path))
