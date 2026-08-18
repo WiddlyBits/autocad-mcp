@@ -12,8 +12,8 @@ uv run pytest -q
 `uv` syncs the `dev` dependency group by default, so the bare form works and uses the synced
 `.venv`. `uv run --group dev pytest -q` is equivalent and explicit.
 
-Expected counts are branch-dependent — **123 on `main`/`fix-dev-dependency-group`, 134 on
-`screenshot-token-cost-controls`, 614 on `visual-cost-ladder`** (439 before the 2026-08-15
+Expected counts are branch-dependent — **123 on `fix-dev-dependency-group`, 134 on
+`screenshot-token-cost-controls`, 614 on `visual-cost-ladder` and on `main`** (439 before the 2026-08-15
 space/parity fixes, 578 at `d179a2e`, 586 at `07e0c0c`; the save/open verification work merged
 from `claude/distracted-bose-d9f7b6` took it to 614, measured green at `2440c07` on 2026-08-17).
 The 11-test gap between the first two is `tests/test_screenshot.py`, which the screenshot branch
