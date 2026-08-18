@@ -54,8 +54,13 @@ origin    https://github.com/WiddlyBits/autocad-mcp.git   <- Gianni's fork, push
 upstream  https://github.com/puran-water/autocad-mcp.git  <- author's repo, pull only
 ```
 
-- Local `main` tracks `upstream/main`; feature branches track `origin`. Pushing to `upstream`
-  always 403s — the credential authenticates as WiddlyBits, which has no write bit there.
+- **`main` and every feature branch track `origin`.** `main` tracked `upstream/main` until
+  2026-08-18; it was retargeted so a bare `git push` from `main` reaches the fork instead of
+  403ing against `upstream`. Pushing to `upstream` still always 403s — the credential
+  authenticates as WiddlyBits, which has no write bit there.
+- **A bare `git pull` on `main` now takes from the fork, not the author.** To take upstream's
+  changes, name it: `git pull upstream main`. `main` is 26 commits ahead of `upstream/main`
+  as of 2026-08-18, so that merge is a real event, not a fast-forward.
 - **A github.com credential persists in Git Credential Manager** (Gianni signed in 2026-08-13).
   Pushes complete unattended with no dialog — verified 2026-08-14 and 2026-08-15. Foreground is
   fine in this regime; backgrounding is only needed if the credential lapses.
