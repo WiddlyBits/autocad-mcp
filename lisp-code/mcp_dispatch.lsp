@@ -64,6 +64,60 @@
   result
 )
 
+;; -----------------------------------------------------------------------
+;; Path comparison — for checking that a file operation landed where it said
+;; -----------------------------------------------------------------------
+
+(defun mcp-normalize-path (p / out i ch)
+  "One canonical spelling of a path: forward slashes, lower case.
+   Windows treats \\ and / and either case as the same file; (= ...) does not.
+   DWGPREFIX comes back with backslashes whatever the caller wrote, so a
+   comparison against it needs both spellings collapsed first."
+  (if (null p) (setq p ""))
+  (setq out "" i 1)
+  (while (<= i (strlen p))
+    (setq ch (substr p i 1))
+    (setq out (strcat out (if (= ch "\\") "/" ch)))
+    (setq i (1+ i))
+  )
+  (strcase out T)
+)
+
+(defun mcp-path-basename (p / norm pos)
+  "The file name at the end of a path, normalized."
+  (setq norm (mcp-normalize-path p))
+  (while (setq pos (vl-string-search "/" norm))
+    (setq norm (substr norm (+ pos 2)))
+  )
+  norm
+)
+
+(defun mcp-active-document-path ( / name prefix)
+  "Full path of the document this dispatcher is running in.
+   DWGNAME is the file name and DWGPREFIX its folder. Both are needed: DWGNAME
+   alone would compare equal to a same-named drawing in any other folder, which
+   is the coincidence a verification step exists to rule out."
+  (setq name (mcp-normalize-path (getvar "DWGNAME")))
+  (setq prefix (mcp-normalize-path (getvar "DWGPREFIX")))
+  (if (vl-string-search "/" name)
+    name                          ; already a full path in some configurations
+    (strcat prefix name)
+  )
+)
+
+(defun mcp-same-drawing (want actual / w a)
+  "True when `want` names the drawing at `actual`.
+   A bare file name is compared by name, a path in full. Anything it cannot
+   prove equal it calls different — reporting a failure that did not happen is
+   recoverable, reporting a success that did not is what this file is fixing."
+  (setq w (mcp-normalize-path want))
+  (setq a (mcp-normalize-path actual))
+  (if (vl-string-search "/" w)
+    (= w a)
+    (= w (mcp-path-basename a))
+  )
+)
+
 (defun mcp-read-file-lines (filepath / fp line lines)
   "Read all lines from a file into a single string."
   (setq fp (open filepath "r"))
@@ -167,7 +221,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result filedia dwg-before dwg-after)
+(defun mcp-dispatch-command (cmd-name params-json / result path filedia dxf-before dxf-after doc-before doc-after dbmod)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (cond
     ;; --- Ping ---
@@ -303,39 +357,146 @@
        (setq path (mcp-json-get-string params-json "path"))
        (if (and path (> (strlen path) 0))
          (progn
+           ;; Unlike OPEN, SAVEAS does work from AutoLISP — it writes the file
+           ;; and renames the active document to it. That rename is what makes
+           ;; this branch checkable: the document we end up in *is* the file
+           ;; that was written, so comparing it against what was asked for is
+           ;; an observation of the save rather than a claim about it.
+           ;;
+           ;; It needs to be, because (command ...) returns nothing whether
+           ;; SAVEAS wrote the file, hit a read-only path, or was refused. The
+           ;; unconditional "saved to: <path>" that used to sit here reported
+           ;; the path it was handed either way — confirmed live, ok: true came
+           ;; back from a SAVEAS that had failed with the original document
+           ;; still active.
+           (setq filedia (getvar "FILEDIA"))
            (setvar "FILEDIA" 0)
-           (command "_.SAVEAS" "" path)
-           (setvar "FILEDIA" 1)
-           (cons T (strcat "\"saved to: " (mcp-escape-string path) "\"")))
-         (progn (command "_.QSAVE") (cons T "\"saved\"")))))
+           ;; Caught rather than allowed to unwind: an error thrown out of
+           ;; SAVEAS would skip the restore below and leave FILEDIA at 0 for
+           ;; the rest of the AutoCAD session, silently suppressing every file
+           ;; dialog Gianni opens by hand afterwards.
+           ;; vl-cmdf, not command: command is a special subr that cannot be
+           ;; applied, and vl-catch-all-apply rejects it with "bad order
+           ;; function: COMMAND" before it ever enters the protected region —
+           ;; so the guard threw the error it was written to catch. vl-cmdf is
+           ;; the applyable twin and is present in LT 2027.
+           ;; The trailing "_Y" answers the overwrite confirmation SAVEAS raises
+           ;; when the target file already exists. Under FILEDIA 0 that arrives
+           ;; as a command-line prompt defaulting to No, so without an answer
+           ;; the save is refused and the branch below correctly reports a
+           ;; failure — for the most ordinary case there is, saving over the
+           ;; file you last saved to. Confirmed live: the same SAVEAS that was
+           ;; refused went through unchanged once "_Y" followed the path.
+           ;;
+           ;; Sent unconditionally because a path that does not exist yet raises
+           ;; no prompt to consume it, and the extra token is then discarded
+           ;; with the command already complete — verified live, CMDACTIVE 0 and
+           ;; the next call unaffected.
+           (vl-catch-all-apply 'vl-cmdf (list "_.SAVEAS" "" path "_Y"))
+           (command)   ; clear anything a refused SAVEAS left at the prompt
+           (setvar "FILEDIA" filedia)
+           (setq doc-after (mcp-active-document-path))
+           (if (mcp-same-drawing path doc-after)
+             (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                             "\", \"document\": \"" (mcp-escape-string doc-after)
+                             "\", \"saved\": true}"))
+             ;; mcp-write-result escapes error text itself; escaping again
+             ;; here would double every backslash in the path.
+             (cons nil (strcat
+                        "SAVEAS did not save to " path
+                        ": the active document is still " doc-after
+                        ". Nothing was written to the requested path, and the"
+                        " drawing you were working on is untouched. Check that"
+                        " the folder exists and that the file is not open or"
+                        " read-only elsewhere. A path given without a .dwg"
+                        " extension also lands here: SAVEAS appends one, so"
+                        " the document it leaves you in is not spelled the way"
+                        " the call asked for it."))))
+         ;; No path: QSAVE writes back over the file the document came from,
+         ;; so there is no rename to compare against and the check has to come
+         ;; from somewhere else. DBMOD is that somewhere — AutoCAD clears it to
+         ;; 0 when a save succeeds and leaves it non-zero while the drawing
+         ;; still holds changes that are not on disk.
+         (if (= (getvar "DWGTITLED") 0)
+           ;; A drawing that has never been saved has no file for QSAVE to
+           ;; write back to, so QSAVE becomes SAVEAS and asks for a name: a
+           ;; modal dialog under FILEDIA 1, a command-line prompt under 0.
+           ;; Either one sits there until the 10 s IPC window times out and the
+           ;; caller learns nothing. Refusing is instant and says what to do.
+           (cons nil (strcat "This drawing has never been saved, so there is no"
+                             " file to save it back to. Pass a path to save it"
+                             " as a new file."))
+           (progn
+             (command "_.QSAVE")
+             ;; Read before touching any other system variable, so nothing
+             ;; between the save and the measurement can move DBMOD.
+             (setq dbmod (getvar "DBMOD"))
+             (setq doc-after (mcp-active-document-path))
+             (if (= dbmod 0)
+               (cons T (strcat "{\"path\": \"" (mcp-escape-string doc-after)
+                               "\", \"document\": \"" (mcp-escape-string doc-after)
+                               "\", \"saved\": true}"))
+               (cons nil (strcat
+                          "QSAVE did not save " doc-after
+                          ": the drawing still holds unsaved changes (DBMOD "
+                          (itoa dbmod) ", 0 is what a save leaves behind)."
+                          " The file on disk is older than what is on screen."
+                          " Check that it is not read-only or open elsewhere."))))))))
 
     ((= cmd-name "drawing-save-as-dxf")
      (progn
        (setq path (mcp-json-get-string params-json "path"))
        (if (and path (> (strlen path) 0))
          (progn
-           ;; SAVEAS is the only DXF writer LT exposes: there is no COM, and
-           ;; EXPORT's format list has no DXF. So this renames the active
-           ;; document to the .dxf — an intrinsic property of SAVEAS, not
-           ;; something a flag turns off. Undoing the rename would take a second
-           ;; SAVEAS back to the .dwg, i.e. rewriting a drawing the caller only
-           ;; asked to export. The rename is reported instead, measured rather
-           ;; than asserted, so the caller learns it here and not from a later
-           ;; QSAVE quietly writing DXF over their drawing.
-           (setq dwg-before (getvar "DWGNAME"))
+           ;; DXFOUT, not SAVEAS with a "DXF" format keyword. That spelling
+           ;; wrote nothing at all — confirmed live against LT 2027, ok: true
+           ;; came back with no file anywhere on disk — and it also renamed the
+           ;; active document to the .dxf, so a later bare QSAVE wrote DXF over
+           ;; the drawing. DXFOUT writes the file and leaves the document
+           ;; alone, which removes the hazard rather than reporting it.
+           ;;
+           ;; "16" answers the decimal-places-of-accuracy prompt. Unlike SAVEAS,
+           ;; DXFOUT replaces an existing file without asking, so there is no
+           ;; overwrite confirmation to send after it.
+           (setq dxf-before (vl-file-systime path))
            ;; Without this, FILEDIA 1 raises a modal Save dialog and the
            ;; dispatcher hangs for the whole 10 s IPC window. Restores the value
            ;; it found, not a hardcoded 1.
            (setq filedia (getvar "FILEDIA"))
            (setvar "FILEDIA" 0)
-           (command "_.SAVEAS" "DXF" path)
+           ;; Caught for the same reason as drawing-save, and applied through
+           ;; vl-cmdf because command cannot be applied at all.
+           (vl-catch-all-apply 'vl-cmdf (list "_.DXFOUT" path "16"))
+           (command)   ; clear anything a refused DXFOUT left at the prompt
            (setvar "FILEDIA" filedia)
-           (setq dwg-after (getvar "DWGNAME"))
-           (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
-                           "\", \"document\": \"" (mcp-escape-string dwg-after)
-                           "\", \"renamed\": "
-                           (if (= dwg-before dwg-after) "false" "true")
-                           "}")))
+           (setq dxf-after (vl-file-systime path))
+           ;; The file is the only evidence available. DXFOUT reports nothing on
+           ;; failure: pointed at a folder that does not exist it returns without
+           ;; error, leaves CMDACTIVE at 0, and writes no file — so neither a
+           ;; caught error nor a return value can be the gate.
+           ;;
+           ;; Existence alone will not do either. A caller re-exporting over
+           ;; last week's DXF would find the stale file still sitting there and
+           ;; be told the export that just failed had succeeded — the exact
+           ;; false success this branch exists to stop. So the timestamp has to
+           ;; move as well. vl-file-systime resolves to the millisecond, and
+           ;; writing the DXF of any real drawing takes far longer than one.
+           (if (and dxf-after (not (equal dxf-before dxf-after)))
+             (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                             "\", \"document\": \""
+                             (mcp-escape-string (mcp-active-document-path))
+                             "\", \"exported\": true}"))
+             ;; mcp-write-result escapes error text itself; escaping again
+             ;; here would double every backslash in the path.
+             (cons nil (strcat
+                        "DXFOUT did not write " path
+                        ": the file on disk did not change. The drawing itself"
+                        " is untouched — DXFOUT exports without renaming the"
+                        " document, so nothing was lost. Check that the folder"
+                        " exists and that the file is not open or read-only"
+                        " elsewhere. A path given without a .dxf extension also"
+                        " lands here: DXFOUT appends one, so the file it writes"
+                        " is not spelled the way the call asked for it."))))
          (cons nil "Save path required"))))
 
     ((= cmd-name "drawing-purge")
@@ -345,12 +506,55 @@
     ((= cmd-name "drawing-open")
      (progn
        (setq path (mcp-json-get-string params-json "path"))
-       (if path
+       (if (and path (> (strlen path) 0))
          (progn
-           (setvar "FILEDIA" 0)
-           (command "_.OPEN" path)
-           (setvar "FILEDIA" 1)
-           (cons T (strcat "\"opened: " (mcp-escape-string path) "\"")))
+           (setq doc-before (mcp-active-document-path))
+           (if (mcp-same-drawing path doc-before)
+             ;; Already the active document. Nothing for OPEN to do, and this
+             ;; is the one success this branch can honestly report.
+             (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                             "\", \"document\": \"" (mcp-escape-string doc-before)
+                             "\", \"switched\": false}"))
+             (progn
+               ;; OPEN tears down the document whose LISP namespace is running
+               ;; this dispatcher, and AutoCAD will not do that from inside
+               ;; (command ...) — the command is ignored. (command ...) returns
+               ;; nothing either way, which is how the unconditional
+               ;; "opened: <path>" that used to sit here reported an open that
+               ;; never happened: confirmed against LT 2027, DWGNAME unchanged
+               ;; and no new tab. Same reason mcp-cmd-drawing-create refuses to
+               ;; use _.NEW.
+               ;;
+               ;; The attempt is still made rather than replaced by a flat
+               ;; refusal, because a refusal is a claim about AutoCAD's
+               ;; behaviour and the comparison below is an observation of it.
+               ;; Note that an OPEN that did work would take this document —
+               ;; and this dispatcher, before it writes a result — down with
+               ;; it, so reaching the next line already means nothing switched.
+               (setq filedia (getvar "FILEDIA"))
+               (setvar "FILEDIA" 0)
+               (vl-catch-all-apply 'vl-cmdf (list "_.OPEN" path))
+               (command)   ; clear whatever the refused OPEN left at the prompt
+               (setvar "FILEDIA" filedia)
+               (setq doc-after (mcp-active-document-path))
+               (if (mcp-same-drawing path doc-after)
+                 (cons T (strcat "{\"path\": \"" (mcp-escape-string path)
+                                 "\", \"document\": \"" (mcp-escape-string doc-after)
+                                 "\", \"switched\": true}"))
+                 ;; mcp-write-result escapes error text itself; escaping again
+                 ;; here would double every backslash in the path.
+                 (cons nil (strcat
+                            "OPEN did not switch documents: still in "
+                            doc-after ", not " path
+                            ". AutoCAD refuses OPEN/NEW/CLOSE from AutoLISP and"
+                            " LT has no COM alternative, so the file_ipc backend"
+                            " cannot change documents. Open the file from the"
+                            " AutoCAD UI and load mcp_dispatch.lsp in it, or use"
+                            " the ezdxf backend to read the file without AutoCAD."))
+               )
+             )
+           )
+         )
          (cons nil "Path required"))))
 
     ;; --- P&ID ---

@@ -66,11 +66,22 @@ async def drawing(
     Operations:
       create     — Create a new empty drawing. data: {name?}
       open       — Open an existing drawing. data: {path}
+                    On the AutoCAD backend this cannot switch documents:
+                    AutoCAD refuses OPEN from AutoLISP and LT has no COM, so
+                    it succeeds only when the file is already the active
+                    document and reports a failure naming the document it is
+                    still in otherwise. Open the file from the AutoCAD UI.
       info       — entity_count, layers, and extents {min:[x,y], max:[x,y]}
                     (null when the drawing is empty). The cheapest way to
                     confirm which document you are in and whether an edit
                     landed — prefer it over a screenshot for both.
       save       — Save current drawing. data: {path?} (saves to path if given, else QSAVE)
+                    Verified, not assumed: with a path, SAVEAS renames the
+                    active document to the file it wrote, and the result is
+                    ok: false unless the document you end up in is that file.
+                    Without a path, success means DBMOD came back 0. A drawing
+                    that has never been saved is refused rather than left
+                    waiting on a filename prompt — pass a path for that.
       save_as_dxf — Export as DXF. data: {path}
       plot_pdf   — Plot to PDF. data: {path}
       purge      — Purge unused objects.
