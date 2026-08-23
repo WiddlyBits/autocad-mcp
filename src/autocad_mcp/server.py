@@ -603,11 +603,21 @@ async def system(
     """Server status and management.
 
     Operations:
-      status        — Backend info, capabilities, health check.
+      status        — Backend info, capabilities, health check, plus a
+                      `preflight` block on the File IPC backend: which .lsp
+                      libraries are live (dispatch/probes/select), the active
+                      `dwg` and `ctab`, `tilemode` and `pickfirst`. Run this
+                      first — it answers in one call what otherwise takes six.
       health        — Quick health check (ping backend).
       get_backend   — Return current backend name and capabilities.
       runtime       — Return process/runtime details for spawn diagnostics.
-      init          — Re-initialize the backend.
+      init          — Re-initialize the backend, re-acquire the window handle
+                      after an AutoCAD restart, AND (re)load mcp_probes.lsp
+                      and mcp_select.lsp into the current document by absolute
+                      path. The APPLOAD Startup Suite therefore only needs
+                      mcp_dispatch.lsp. Re-loading every time is deliberate:
+                      it is the fix for edited-on-disk .lsp files whose old
+                      definitions stay resident and answer plausibly.
       execute_lisp  — Execute arbitrary AutoLISP code (File IPC only). data: {code}
     """
     data = data or {}
@@ -615,6 +625,14 @@ async def system(
     if operation == "status" or operation == "get_backend":
         backend = await get_backend()
         result = await backend.status()
+        # Fold the preflight in: which libraries are live, which document and
+        # space are in front, whether grip selection is enabled. Best-effort —
+        # status is also the health check, so a drawing that cannot answer must
+        # still produce a status rather than an error.
+        if result.ok and isinstance(result.payload, dict):
+            pre = await backend.preflight()
+            if pre.ok:
+                result.payload["preflight"] = pre.payload
         return await add_screenshot_if_available(result, include_screenshot)
     elif operation == "health":
         try:
@@ -643,6 +661,13 @@ async def system(
         client._backend = None
         backend = await get_backend()
         result = await backend.status()
+        # init is also how the .lsp libraries get into the current document.
+        # It re-loads them every time on purpose: that is the fix for the
+        # stale-definition trap, where a file edited on disk leaves the old
+        # definitions resident and answering plausibly.
+        if result.ok and isinstance(result.payload, dict):
+            libs = await backend.load_libraries()
+            result.payload["preflight"] = libs.payload if libs.ok else {"error": libs.error}
         return _json(result.to_dict())
     elif operation == "execute_lisp":
         backend = await get_backend()

@@ -102,6 +102,27 @@ class AutoCADBackend(ABC):
     async def execute_lisp(self, code: str) -> CommandResult:
         return CommandResult(ok=False, error="Not supported on this backend")
 
+    async def load_libraries(self) -> CommandResult:
+        """Load the .lsp helper libraries into the running document.
+
+        The APPLOAD Startup Suite is a manual, invisible mechanism, and a
+        library that is not in it fails by being absent rather than by
+        erroring: the probe ladder silently degrades to hand-rolled AutoLISP
+        and nothing says so. Python already knows where the files are
+        (config.LISP_DIR), so it can load them by absolute path instead.
+        """
+        return CommandResult(ok=False, error="Not supported on this backend")
+
+    async def preflight(self) -> CommandResult:
+        """Everything a session needs to know before its first edit, in one call.
+
+        Which libraries are live, which document and space are in front, and
+        whether grip selection is even enabled. Six separate calls answered
+        this on 2026-08-22; at ~108 K cache-read per request that is the
+        cheapest consolidation available.
+        """
+        return CommandResult(ok=False, error="Not supported on this backend")
+
     # --- Entity operations ---
 
     async def create_line(self, x1: float, y1: float, x2: float, y2: float, layer: str | None = None) -> CommandResult:

@@ -308,6 +308,66 @@ class FileIPCBackend(AutoCADBackend):
             "code_file": str(code_file).replace("\\", "/")
         })
 
+    # --- Library loading and preflight ---
+
+    #: Libraries the Startup Suite does not have to carry, in load order.
+    #: mcp_select.lsp calls into mcp_probes.lsp (mcp:fmt, mcp:bb-union,
+    #: mcp:ent-bbox-data), so the order is a dependency, not a preference.
+    LIBRARIES = ("mcp_probes.lsp", "mcp_select.lsp")
+
+    #: `(type sym)` rather than `(member 'sym (atoms-family 1))`.
+    #:
+    #: atoms-family with format 1 returns a list of STRINGS, so testing it
+    #: with a quoted symbol compares a symbol against strings and is nil
+    #: whether or not the function exists. That check was used on 2026-08-22
+    #: and answered "NOT LOADED"; it would have answered "NOT LOADED" for a
+    #: loaded file too. An unbound symbol evaluates to nil in AutoLISP rather
+    #: than erroring, so (type ...) is both safe and actually discriminating.
+    _PREFLIGHT = (
+        '(strcat "{\\"dispatch\\":" (if (type c:mcp-dispatch) "true" "false")'
+        ' ",\\"probes\\":" (if (type mcp:text-dump-in) "true" "false")'
+        ' ",\\"select\\":" (if (type mcp:sel-dump) "true" "false")'
+        ' ",\\"reactor_fn\\":" (if (type mcp:on-cmd) "true" "false")'
+        ' ",\\"dwg\\":\\"" (getvar "DWGNAME") "\\""'
+        ' ",\\"ctab\\":\\"" (getvar "CTAB") "\\""'
+        ' ",\\"tilemode\\":" (itoa (getvar "TILEMODE"))'
+        ' ",\\"pickfirst\\":" (itoa (getvar "PICKFIRST")) "}")'
+    )
+
+    def _load_forms(self) -> str:
+        """`(load ...)` guarded by `(findfile ...)` for each library.
+
+        Unguarded, a missing file makes `load` raise and takes the preflight
+        down with it — which would report nothing about the libraries that
+        *are* there.
+        """
+        forms = []
+        for name in self.LIBRARIES:
+            path = str(LISP_DIR / name).replace("\\", "/")
+            forms.append(f'(if (findfile "{path}") (load "{path}"))')
+        return "".join(forms)
+
+    async def load_libraries(self) -> CommandResult:
+        """Load the helper libraries, then report what is live.
+
+        One round trip, not three: the preflight is the last form, so its
+        value is the payload.
+        """
+        return await self.preflight(load_first=True)
+
+    async def preflight(self, load_first: bool = False) -> CommandResult:
+        code = (self._load_forms() if load_first else "") + self._PREFLIGHT
+        result = await self.execute_lisp(code)
+        if not result.ok:
+            return result
+        # The dispatcher hands back the last form's value as a string. Parsing
+        # it here means callers get a dict rather than each writing their own
+        # ad-hoc parse of the same shape.
+        try:
+            return CommandResult(ok=True, payload=json.loads(result.payload))
+        except (TypeError, ValueError):
+            return CommandResult(ok=True, payload={"raw": result.payload})
+
     # --- Entity operations ---
 
     async def create_line(self, x1, y1, x2, y2, layer=None) -> CommandResult:
