@@ -13,11 +13,12 @@ uv run pytest -q
 `.venv`. `uv run --group dev pytest -q` is equivalent and explicit.
 
 Expected counts are branch-dependent — **123 on `fix-dev-dependency-group`, 134 on
-`screenshot-token-cost-controls`, 614 on `visual-cost-ladder` and on `main`, 690 on
+`screenshot-token-cost-controls`, 614 on `visual-cost-ladder`, 690 on `main` and on
 `selection-driven-editing`** (439 before the 2026-08-15
 space/parity fixes, 578 at `d179a2e`, 586 at `07e0c0c`; the save/open verification work merged
 from `claude/distracted-bose-d9f7b6` took it to 614, measured green at `2440c07` on 2026-08-17;
-`mcp_select.lsp` plus the preflight added 58 + 18 on 2026-08-22).
+`mcp_select.lsp` plus the preflight added 58 + 18 on 2026-08-22, and `selection-driven-editing`
+fast-forwarded into `main` at `a8c8aa2` on 2026-08-25, carrying 690 there — measured green).
 The 11-test gap between the first two is `tests/test_screenshot.py`, which the screenshot branch
 extends. A count below the branch's expected number is a real failure; 123 vs 134 on its own is
 not.
