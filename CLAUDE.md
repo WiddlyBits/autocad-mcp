@@ -82,6 +82,24 @@ upstream  https://github.com/puran-water/autocad-mcp.git  <- author's repo, pull
 - Identity is set **repo-local only** to `Gianni <giannimagnabooking@gmail.com>` — deliberately not
   global. Never commit as `hvkshetry`.
 
+## Skills
+
+`skills/` is the canonical copy of the AutoCAD skills — `autocad-mcp-workflow` and
+`autocad-save-verification` — versioned next to the server they document. Deploy them with
+
+```
+powershell -File scripts/sync-skills.ps1        # -WhatIf to preview
+```
+
+which globs the session GUIDs under
+`%APPDATA%\Claude\local-agent-mode-sessions\skills-plugin\*\*\skills` rather than
+hardcoding them, because those are exactly what the app re-provisions.
+
+**Edit here, not there.** The AppData copy is a deployment target. Editing it in place is
+how the skill came to document a `preflight` block and an `mcp_select.lsp` that existed
+only on an unmerged branch — a divergence nothing could catch while one half was outside
+version control. That gap closed when `selection-driven-editing` landed on 2026-08-25.
+
 ## Screenshot cost controls
 
 `view(operation="get_screenshot")` takes `max_dimension` (longest side px, default 1280, clamped
