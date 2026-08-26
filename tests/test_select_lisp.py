@@ -35,6 +35,8 @@ PUBLIC = [
     "mcp:by-handles",
     "mcp:guard",
     "mcp:reactor-init",
+    "mcp:whoami",
+    "mcp:verify-write",
     "mcp:line-uniform",
     "mcp:align-axis",
     "mcp:sel-move",
@@ -266,3 +268,77 @@ class TestTextAlignmentPoint:
         declines."""
         body = defun_body(source(SELECT_LSP), "mcp:text-sub")
         assert "(assoc 3 data)" in body
+
+
+class TestWhoami:
+    """The identity probe. Its whole reason to exist is that the getvar list was
+    retyped from memory five times in one session on 2026-08-25, so what matters
+    is that it answers the full question in one call rather than most of it."""
+
+    @pytest.mark.parametrize(
+        "var", ["DWGNAME", "DWGPREFIX", "CTAB", "TILEMODE", "DBMOD", "FILEDIA", "DWGTITLED"]
+    )
+    def test_reports(self, var):
+        body = defun_body(source(SELECT_LSP), "mcp:whoami")
+        assert f'(getvar "{var}")' in body, f"whoami does not report {var}"
+
+    def test_reports_the_folder_not_just_the_name(self):
+        """Two drawings with the same name in different folders is the ordinary
+        case. DWGNAME alone cannot tell them apart, and this probe is what gets
+        consulted before something destructive."""
+        body = defun_body(source(SELECT_LSP), "mcp:whoami")
+        assert '\\"prefix\\":' in body
+
+    def test_dirty_state_is_a_boolean_not_just_the_raw_flag(self):
+        """DBMOD is a bit field. A caller asking "are there unsaved changes"
+        should not have to know that."""
+        body = defun_body(source(SELECT_LSP), "mcp:whoami")
+        assert '\\"dirty\\":' in body
+
+
+class TestVerifyWrite:
+    """The save/export check, whose contract is that evidence comes from the
+    file and not from the return value."""
+
+    def test_verdict_does_not_come_from_the_caught_error(self):
+        """Measured 2026-08-22: DXFOUT aimed at a directory that does not exist
+        returned "no-error" and wrote nothing. An error that is never raised
+        cannot be caught, so ok has to be derived from the file changing."""
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert '"{\\"ok\\":" (if changed' in body, "ok is not derived from `changed`"
+
+    def test_compares_the_file_before_and_after(self):
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert body.count("(vl-file-systime path)") == 2, "needs a before AND an after"
+
+    def test_size_backs_up_the_timestamp(self):
+        """A rewrite fast enough to land inside the same second is invisible to
+        mtime alone."""
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert body.count("(vl-file-size path)") == 2
+        assert "(/= before-size after-size)" in body
+
+    def test_reports_the_error_without_trusting_it(self):
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert "vl-catch-all-error-p" in body
+        assert '\\"error\\":' in body
+
+    def test_filedia_is_restored_to_what_it_was(self):
+        """Not to 1 — the caller may have set it deliberately. Forcing it to 0
+        and leaving it there is how a later interactive command loses its
+        dialog."""
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert '(setq fd (getvar "FILEDIA"))' in body
+        assert '(setvar "FILEDIA" 0)' in body
+        assert '(setvar "FILEDIA" fd)' in body
+
+    def test_flushes_a_half_finished_command(self):
+        """Without the bare (vl-cmdf), a command still waiting on input leaves
+        CMDACTIVE set and the next call inherits it."""
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert "(vl-cmdf)" in body
+        assert '\\"cmdactive\\":' in body
+
+    def test_a_missing_file_afterwards_is_never_a_pass(self):
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert "((null after) nil)" in body

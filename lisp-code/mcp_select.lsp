@@ -677,5 +677,131 @@
   )
 )
 
-(princ "\nmcp_select.lsp loaded: c:HS mcp:sel mcp:sel-dump mcp:sel-show mcp:by-handles mcp:guard mcp:reactor-init mcp:line-uniform mcp:align-axis mcp:sel-move mcp:text-sub")
+;; -----------------------------------------------------------------------
+;; Identity and write verification
+;;
+;; Neither of these does anything a caller could not write inline. That is
+;; exactly why they are here. Measured on 2026-08-25 over the previous day's
+;; transcripts, one session hand-wrote the identity getvar list FIVE times and
+;; rebuilt the FILEDIA/mtime dance about six times, each variation slightly
+;; different from the last, each one its own ~108 K round trip. A one-liner
+;; retyped from memory is a one-liner that is eventually retyped wrong.
+;; -----------------------------------------------------------------------
+
+(defun mcp:pad2 (n)
+  (if (< n 10) (strcat "0" (itoa n)) (itoa n))
+)
+
+(defun mcp:systime-str (st)
+  "vl-file-systime's list as \"YYYY-MM-DD HH:MM:SS\", or \"\" for nil.
+
+   The raw list wedges day-of-week in at index 2, so the day sits at 3 and
+   every field after it is off by one from where it looks like it should be.
+   Skipping it here means no caller has to remember to."
+  (if st
+    (strcat (itoa (nth 0 st)) "-"
+            (mcp:pad2 (nth 1 st)) "-"
+            (mcp:pad2 (nth 3 st)) " "
+            (mcp:pad2 (nth 4 st)) ":"
+            (mcp:pad2 (nth 5 st)) ":"
+            (mcp:pad2 (nth 6 st)))
+    ""
+  )
+)
+
+(defun mcp:whoami ( / out)
+  "Which document, which space, and is it dirty - in one call.
+
+   DWGPREFIX is reported next to DWGNAME because the question this actually
+   answers is not \"what is it called\" but \"which file am I about to write
+   over\", and two drawings with the same name in different folders is the
+   ordinary case, not the exotic one. autocad-mcp routes to whatever window
+   holds UI focus, so the answer is not necessarily the document the caller
+   had in mind.
+
+   dbmod is reported raw and as a boolean: nonzero means unsaved changes,
+   which is the precondition worth checking before an open or a close, and
+   the thing a bare {\"ok\":true} from save will not tell you."
+  (mcp:begin-output)
+  (setq out (strcat "{\"ok\":true,\"verb\":\"whoami\""
+                    ",\"dwg\":\"" (mcp:esc (getvar "DWGNAME")) "\""
+                    ",\"prefix\":\"" (mcp:esc (getvar "DWGPREFIX")) "\""
+                    ",\"ctab\":\"" (mcp:esc (getvar "CTAB")) "\""
+                    ",\"tilemode\":" (itoa (getvar "TILEMODE"))
+                    ",\"dbmod\":" (itoa (getvar "DBMOD"))
+                    ",\"filedia\":" (itoa (getvar "FILEDIA"))
+                    ",\"titled\":" (if (= 1 (getvar "DWGTITLED")) "true" "false")
+                    ",\"dirty\":" (if (= 0 (getvar "DBMOD")) "false" "true")
+                    "}"))
+  (mcp:end-output)
+  out
+)
+
+(defun mcp:verify-write (path cmdlist / fd existed before before-size
+                                        r err after after-size changed out)
+  "Run a file-writing command and report whether the file actually moved.
+
+   cmdlist is the argument list for vl-cmdf, so the caller writes the command
+   it means:
+
+     (mcp:verify-write \"C:/temp/x.dxf\" (list \"_.DXFOUT\" \"C:/temp/x.dxf\" \"16\"))
+     (mcp:verify-write \"C:/t/a.dwg\"    (list \"_.SAVEAS\" \"\" \"C:/t/a.dwg\" \"_Y\"))
+
+   ok is derived from the FILE, never from the absence of a caught error, and
+   that is the whole point. Measured 2026-08-22: DXFOUT aimed at a directory
+   that does not exist returned \"no-error\" from vl-catch-all-apply and wrote
+   nothing at all. An error that is never raised cannot be caught, so the only
+   evidence that survives is that the bytes on disk changed. Same reasoning as
+   the standing rule that a bare {\"ok\":true} from save is not evidence.
+
+   FILEDIA is forced to 0 so the command takes its filename from the argument
+   list instead of stopping on a dialog the caller can neither see nor
+   dismiss, and restored to whatever it was - not to 1 - because the caller
+   may have set it deliberately. The bare (vl-cmdf) flushes any input a
+   half-finished command is still waiting on; without it the next call
+   inherits an active command.
+
+   Size is compared as well as mtime: a rewrite fast enough to land inside the
+   same second is invisible to the timestamp alone. When both are identical
+   this reports changed:false, which is the conservative answer rather than
+   the confident wrong one."
+  (mcp:begin-output)
+  (setq existed (if (findfile path) T nil))
+  (setq before (vl-file-systime path))
+  (setq before-size (vl-file-size path))
+  (setq fd (getvar "FILEDIA"))
+  (setvar "FILEDIA" 0)
+  (setq r (vl-catch-all-apply 'vl-cmdf cmdlist))
+  (vl-cmdf)
+  (setvar "FILEDIA" fd)
+  (setq err (if (vl-catch-all-error-p r) (vl-catch-all-error-message r) nil))
+  (setq after (vl-file-systime path))
+  (setq after-size (vl-file-size path))
+  (setq changed
+    (cond
+      ((null after) nil)
+      ((not existed) T)
+      ((not (equal before after)) T)
+      ((and before-size after-size (/= before-size after-size)) T)
+      (T nil)
+    )
+  )
+  (setq out (strcat "{\"ok\":" (if changed "true" "false")
+                    ",\"verb\":\"verify-write\""
+                    ",\"path\":\"" (mcp:esc path) "\""
+                    ",\"changed\":" (if changed "true" "false")
+                    ",\"existed_before\":" (if existed "true" "false")
+                    ",\"exists_after\":" (if after "true" "false")
+                    ",\"mtime_before\":\"" (mcp:systime-str before) "\""
+                    ",\"mtime_after\":\"" (mcp:systime-str after) "\""
+                    ",\"size\":" (if after-size (itoa after-size) "-1")
+                    ",\"cmdactive\":" (itoa (getvar "CMDACTIVE"))
+                    ",\"dbmod\":" (itoa (getvar "DBMOD"))
+                    ",\"error\":" (if err (strcat "\"" (mcp:esc err) "\"") "null")
+                    "}"))
+  (mcp:end-output)
+  out
+)
+
+(princ "\nmcp_select.lsp loaded: c:HS mcp:sel mcp:sel-dump mcp:sel-show mcp:by-handles mcp:guard mcp:reactor-init mcp:whoami mcp:verify-write mcp:line-uniform mcp:align-axis mcp:sel-move mcp:text-sub")
 (princ)

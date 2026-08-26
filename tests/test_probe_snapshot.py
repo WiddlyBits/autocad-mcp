@@ -319,3 +319,54 @@ def test_probes_module_and_lisp_port_are_kept_together():
         "mcp_probes.lsp must emit the same snapshot header as probes.py, or the "
         "golden fixture cannot be used to validate the AutoLISP port."
     )
+
+
+class TestCLI:
+    """The zero-context rung needs a command, not just an importable function.
+
+    Before this existed the ladder's cheapest useful step — export a DXF, read
+    it here, spend nothing on context — was documented but not runnable, so
+    reaching for it meant writing a throwaway script first. That is how a rung
+    gets skipped in favour of a screenshot.
+    """
+
+    FIXTURE = GOLDEN_DIR / "pid_example.dxf"
+
+    def test_snapshot_matches_the_library_call(self, capsys):
+        """The CLI is a front door, not a second implementation."""
+        assert probe_dxf.main([str(self.FIXTURE)]) == 0
+        assert capsys.readouterr().out.strip() == snapshot_file(self.FIXTURE).strip()
+
+    def test_lists_the_spaces(self, capsys):
+        assert probe_dxf.main([str(self.FIXTURE), "--spaces"]) == 0
+        assert "Model" in capsys.readouterr().out.splitlines()
+
+    def test_dumps_text_with_layer_and_position(self, capsys):
+        assert probe_dxf.main([str(self.FIXTURE), "--text"]) == 0
+        out = capsys.readouterr().out
+        assert "TK-101" in out and "PID-ANNOTATION" in out
+
+    def test_text_json_is_parseable(self, capsys):
+        import json
+
+        assert probe_dxf.main([str(self.FIXTURE), "--text", "--json"]) == 0
+        items = json.loads(capsys.readouterr().out)
+        assert {i["text"] for i in items} == {"TK-101", "P-101", "V-101"}
+        assert all(i["layer"] and i["handle"] for i in items)
+
+    def test_a_missing_file_is_an_error_not_a_traceback(self, capsys, tmp_path):
+        assert probe_dxf.main([str(tmp_path / "nope.dxf")]) == 1
+        assert "not found" in capsys.readouterr().err
+
+    def test_an_unknown_space_names_the_ones_that_exist(self, capsys):
+        """A caller who guessed the layout name should not have to spend a
+        second run finding out what the real ones are."""
+        assert probe_dxf.main([str(self.FIXTURE), "--space", "Layout9"]) == 1
+        err = capsys.readouterr().err
+        assert "Layout9" in err and "Model" in err
+
+    def test_a_file_that_is_not_a_dxf_is_an_error_not_a_traceback(self, capsys, tmp_path):
+        bad = tmp_path / "junk.dxf"
+        bad.write_text("this is not a DXF", encoding="utf-8")
+        assert probe_dxf.main([str(bad)]) == 1
+        assert "cannot read" in capsys.readouterr().err

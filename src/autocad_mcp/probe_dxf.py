@@ -11,6 +11,7 @@ meaningful contract: both sides feed the same shapes into the same logic.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import ezdxf
@@ -123,3 +124,96 @@ def snapshot_doc(doc, cols: int = 24, rows: int = 12, space: str = MODEL) -> str
 
 def snapshot_file(path: str | Path, cols: int = 24, rows: int = 12, space: str = MODEL) -> str:
     return snapshot_doc(ezdxf.readfile(str(path)), cols=cols, rows=rows, space=space)
+
+
+# ---------------------------------------------------------------------------
+# CLI — the rung that costs no context at all
+#
+# The capture ladder's cheapest useful rung is "export a DXF and read it here",
+# because parsing happens on this machine and nothing but the answer enters the
+# conversation. That rung was documented before it was runnable: the functions
+# above have been importable for a while, but there was no command, so reaching
+# for it meant writing a throwaway script first and the ladder got skipped.
+# ---------------------------------------------------------------------------
+
+
+def text_items(doc, space: str = MODEL) -> list[dict]:
+    """Every string in a space, with where it sits and what layer it is on.
+
+    This is the answer to "what does that label say", which is otherwise a
+    screenshot — and a screenshot is the one way of reading text that can be
+    confidently wrong.
+    """
+    out = []
+    for info in (entity_info(e) for e in entities_in(doc, space)):
+        if info.get("text") is None:
+            continue
+        out.append(
+            {
+                "type": info["type"],
+                "handle": info["handle"],
+                "layer": info["layer"],
+                "text": info["text"],
+                "insert": info.get("insert"),
+                "height": info.get("height"),
+            }
+        )
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json as _json
+
+    parser = argparse.ArgumentParser(
+        prog="python -m autocad_mcp.probe_dxf",
+        description="Read a DXF exported from AutoCAD, without AutoCAD and without a screenshot.",
+    )
+    parser.add_argument("dxf", type=Path, help="path to a .dxf (drawing(save_as_dxf) writes one)")
+    parser.add_argument("--space", default=MODEL, help='layout to read (default: "Model")')
+    parser.add_argument("--cols", type=int, default=24, help="snapshot grid columns")
+    parser.add_argument("--rows", type=int, default=12, help="snapshot grid rows")
+    parser.add_argument("--text", action="store_true", help="dump every string instead of the grid")
+    parser.add_argument("--spaces", action="store_true", help="list the layouts and exit")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable output")
+    args = parser.parse_args(argv)
+
+    if not args.dxf.exists():
+        print(f"not found: {args.dxf}", file=sys.stderr)
+        return 1
+
+    try:
+        doc = ezdxf.readfile(str(args.dxf))
+    except (OSError, ezdxf.DXFError) as exc:
+        print(f"cannot read {args.dxf}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.spaces:
+        names = spaces(doc)
+        print(_json.dumps(names) if args.json else "\n".join(names))
+        return 0
+
+    try:
+        if args.text:
+            items = text_items(doc, args.space)
+            if args.json:
+                print(_json.dumps(items, indent=2))
+            else:
+                for it in items:
+                    where = it["insert"]
+                    at = f"({where[0]}, {where[1]})" if where else "?"
+                    print(f'{it["handle"]:>8}  {it["layer"]:<20} {at:<24} {it["text"]!r}')
+                print(f"\n{len(items)} string(s) in {args.space}")
+            return 0
+
+        text = snapshot_doc(doc, cols=args.cols, rows=args.rows, space=args.space)
+        print(_json.dumps({"space": args.space, "snapshot": text}, indent=2) if args.json else text)
+    except KeyError as exc:
+        # spaces() already names what is available; surface that rather than a traceback.
+        print(str(exc).strip("\"'"), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
