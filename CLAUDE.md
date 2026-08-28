@@ -9,47 +9,15 @@ author (`hvkshetry`) and cannot request permissions on the upstream repo.
 uv run pytest -q
 ```
 
-`uv` syncs the `dev` dependency group by default, so the bare form works and uses the synced
-`.venv`. `uv run --group dev pytest -q` is equivalent and explicit.
-
 Expected counts are branch-dependent — **123 on `fix-dev-dependency-group`, 134 on
 `screenshot-token-cost-controls`, 614 on `visual-cost-ladder`, 690 on
-`selection-driven-editing`, 715 on `main`** (439 before the 2026-08-15
-space/parity fixes, 578 at `d179a2e`, 586 at `07e0c0c`; the save/open verification work merged
-from `claude/distracted-bose-d9f7b6` took it to 614, measured green at `2440c07` on 2026-08-17;
-`mcp_select.lsp` plus the preflight added 58 + 18 on 2026-08-22, and `selection-driven-editing`
-fast-forwarded into `main` at `a8c8aa2` on 2026-08-25, carrying 690 there, and `mcp:whoami` +
-`mcp:verify-write` plus the `probe_dxf` CLI added 18 + 7 the same day — 715, measured green).
-The 11-test gap between the first two is `tests/test_screenshot.py`, which the screenshot branch
-extends. A count below the branch's expected number is a real failure; 123 vs 134 on its own is
-not.
+`selection-driven-editing`, 715 on `main`**. A count below the branch's expected number is a
+real failure. Re-measure and update this line whenever a commit changes the count — a stale
+number here turns a real failure into one that reads as normal.
 
-Re-measure and update this line whenever a commit changes the count — a stale number here turns a
-real failure into one that reads as normal.
-
-`tests/golden/*.snap` are committed fixtures, not build output. `python -m tests.generate_golden`
-does **not** regenerate them: that takes `--rebaseline-snapshots` *and* `AUTOCAD_MCP_REBASELINE=1`,
-two gates, because rebaselining a red snapshot test is the cheapest way to convert a caught
-regression into a committed one. Read the diff first.
-
-**Never use `uv run --with pytest --with pytest-asyncio pytest`.** It works, but builds a throwaway
-environment on *every* invocation (8 packages reinstalled each time; one session did this 4×).
-It was the only option before 2026-08-14 — it isn't any more.
-
-<details>
-<summary>Why it used to fail (fixed 2026-08-14)</summary>
-
-`pyproject.toml` declared `dev = ["pytest", "pytest-asyncio"]` as a bare key inside `[project]`.
-That is not valid PEP 621 — neither `[project.optional-dependencies]` nor `[dependency-groups]` —
-so it was inert and the dev deps never synced. Every obvious invocation failed: `uv run pytest`
-("program not found"), `--extra dev` ("not defined in the optional-dependencies table"),
-`--group dev` ("not defined in the dependency-groups table"), and
-`./.venv/Scripts/python.exe -m pytest` ("No module named pytest" — the venv had neither pytest nor
-pip). Fixed by moving those two deps into a proper `[dependency-groups]` table.
-
-This is a local fix not present upstream. It touches `pyproject.toml` and `uv.lock`, so keep it on
-its own commit — don't fold it into a feature branch staged for an upstream PR.
-</details>
+`tests/golden/*.snap` are committed fixtures, not build output. Regenerating them requires both
+`--rebaseline-snapshots` and `AUTOCAD_MCP_REBASELINE=1` — two gates, because rebaselining a red
+snapshot is the cheapest way to convert a caught regression into a committed one. Read the diff first.
 
 ## Git
 
@@ -99,6 +67,22 @@ hardcoding them, because those are exactly what the app re-provisions.
 how the skill came to document a `preflight` block and an `mcp_select.lsp` that existed
 only on an unmerged branch — a divergence nothing could catch while one half was outside
 version control. That gap closed when `selection-driven-editing` landed on 2026-08-25.
+
+### Skill selection
+
+| Trigger | Load this skill |
+|---|---|
+| Any `mcp__autocad-mcp__*` call; editing a .dwg; selection handoff; LISP batching; DXF probe; screenshot planning; troubleshooting the MCP connection | `autocad-mcp-workflow` |
+| Saving/saving-as a .dwg; DXFOUT; `drawing(save_as_dxf)`; opening/closing a drawing; any write that must be verified | `autocad-save-verification` |
+
+### LISP / probe error contracts
+
+Exact payload signatures — match these without re-reading the LSP files:
+
+- **`WRONG-DOC`** — `{"ok":false,"error":"WRONG-DOC","wanted_dwg":…,"wanted_tab":…,"actual_dwg":…,"actual_tab":…}`. Use `actual_dwg`/`actual_tab` directly; no round-trip re-probe needed.
+- **`UNRESOLVED-REF`** — `{"ok":false,"error":"UNRESOLVED-REF","ref":…}`. The reference coordinate was not found in the selection set; check `(mcp:sel-dump)` coordinates before retrying.
+- **Probe truncation** — `"truncated":true,"truncated_reason":"max_entities"|"time"`. Fix: switch to the `-in` form with a specific layer or tighter region.
+- **sel-dump truncation** — `"truncated":true` in the sel-dump payload (count > `*mcp-max-selection*` = 200). Re-select a tighter set.
 
 ## Screenshot cost controls
 

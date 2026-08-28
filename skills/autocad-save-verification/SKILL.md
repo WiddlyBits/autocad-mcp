@@ -1,19 +1,22 @@
 ---
 name: autocad-save-verification
 description: >-
-  How to save, export, or open a drawing through autocad-mcp and actually know it
-  worked. Use whenever a .dwg is being saved or saved-as, a DXF or PDF is being
-  exported, a drawing is being opened or closed, or a write appeared to succeed and
-  the next step depends on it having landed — including when drawing(save),
-  drawing(save_as_dxf), QSAVE, SAVEAS, or DXFOUT returns ok and that ok is about to
-  be believed. Use it before any destructive or file-identity-critical step, and
-  whenever the same export has been retried more than once.
+  Save .dwg in place, SAVEAS to a new path, DXFOUT/DXF export, drawing open/close,
+  or verify that any write actually landed. Load before any save, export, or
+  file-identity-critical step — including when drawing(save), drawing(save_as_dxf),
+  QSAVE, SAVEAS, or DXFOUT returns ok and that ok is about to be believed.
 ---
 
 # Knowing a write actually landed
 
 **`{"ok":true}` is a report that a call was made, not that a file changed.** Every rule
 here comes from a measured case where the two came apart.
+
+## Rule 0: confirm identity before anything destructive
+
+**Before any SAVEAS, DXFOUT, or destructive command: call `(mcp:whoami)`.**
+It returns file, folder, tab, and dirty state in one call. `DWGNAME` alone cannot
+distinguish two drawings with the same name in different folders.
 
 ## Reach for the right verb
 
@@ -76,31 +79,37 @@ or not they wrote anything, because a document with nothing pending is already a
 
 `drawing(save)` reporting ok and `drawing(info)` reporting the document are two answers
 from the same path. When a save matters, cross the boundary: check the file with
-`mcp:verify-write` or read the bytes back with
+`mcp:verify-write` or read the bytes back with the DXF probe (see below).
 
+## Geometry export verification
+
+For any DXF export, confirm the write with:
+
+```bash
+uv run python -m autocad_mcp.probe_dxf out.dxf          # grid snapshot
+uv run python -m autocad_mcp.probe_dxf out.dxf --text   # all strings, with layer and point
 ```
-python -m autocad_mcp.probe_dxf out.dxf --text
-```
 
-which parses on this machine and costs nothing in context. A DXF you exported and then
-successfully parsed is the strongest available proof that the export is real and complete.
+Run from `~/autocad-mcp`. A DXF that parses successfully is the strongest available proof
+that the export is real and complete — parsing happens on this machine, so only the answer
+enters the conversation.
 
-## Stop after the second identical retry
+## Hard stop after two failed write attempts
 
-Session `8f540404` on 2026-08-25 issued **four consecutive `drawing(save_as_dxf)` calls**
-against the same target. At roughly 108 K cache-read per round trip, a retry that repeats
-the failing call unchanged costs as much as the work would have.
+**If the same write call fails twice without a structural change between them, stop. Do
+not issue a third call.** A write that fails twice the same way is not flaky — something
+structural is wrong. Session `8f540404` on 2026-08-25 issued four consecutive
+`drawing(save_as_dxf)` calls unchanged, costing ~108 K cache-read each time.
 
-A write that failed twice the same way is not flaky — something structural is wrong.
-Check, in this order and once each:
+Diagnose in this order, once each:
 
 - Does the **parent directory** exist? This is the measured `no-error` silent-failure case.
 - Is `FILEDIA` where you expect? A stray 1 means the command is waiting on a dialog.
 - Is `CMDACTIVE` nonzero? A half-finished command eats the next call's input — a bare
   `(vl-cmdf)` flushes it.
 - Is the file **locked** — open in another AutoCAD window, or holding a `.dwl`?
-- Is this even the document you think it is? `(mcp:whoami)` reports the file, folder, tab
-  and dirty state in one call. autocad-mcp routes to whatever window has UI focus.
+- Is this even the document you think it is? `(mcp:whoami)` confirms file, folder, tab,
+  and dirty state. autocad-mcp routes to whatever window has UI focus.
 
 ## Before anything destructive
 

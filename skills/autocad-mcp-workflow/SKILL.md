@@ -1,17 +1,12 @@
 ---
 name: autocad-mcp-workflow
 description: >-
-  How to work efficiently and safely in AutoCAD LT via the autocad-mcp MCP server
-  (tools named mcp__autocad-mcp__ system, drawing, entity, layer, view, block,
-  annotation, pid). Use this any time Gianni is doing CAD or drawing work through
-  autocad-mcp: editing a .dwg, rebuilding a panel layout, cleaning up a border or
-  template, or troubleshooting the MCP connection itself, even if he does not say
-  "skill" or name the tool explicitly. Use it especially when he refers to what he
-  has selected — "the lines I have selected", "move these circles", "duplicate
-  these labels" — because grip selection does not survive the MCP link and Rule 1
-  is how it gets handed over. Also consult it before the first autocad-mcp call of
-  a session, and whenever a drawing, save, or open operation needs verifying, a
-  screenshot is about to be taken, or AutoCAD seems stuck after an execute_lisp call.
+  Align text, batch LISP, DXF probe, selection handoff, save verification, screenshot
+  planning, or troubleshoot autocad-mcp (tools named mcp__autocad-mcp__ system, drawing,
+  entity, layer, view, block, annotation, pid). Load before any mcp__autocad-mcp__ call
+  and whenever the user refers to a selection ("the lines I have selected", "move these
+  circles", "duplicate these labels") — grip selection does not survive the MCP link and
+  Rule 1 is how it gets handed over.
 ---
 
 # Working in AutoCAD LT via autocad-mcp
@@ -55,10 +50,10 @@ never ask him to re-select in the hope that this time it survives.
    including the literal contents of any text. It answers everything; do not follow it
    with a second probe of the same set.
 3. **Echo before you mutate.** `(mcp:sel-show)` zooms to the set and highlights it, at
-   zero token cost — he is already looking at the screen. Say what you counted
-   ("16 TEXT on layer LABEL, model space"). A set that does not match what he described
-   is the moment to stop, and it is the check that catches stray entities *before* they
-   are edited rather than twenty minutes later.
+   zero token cost. Say what you counted ("16 TEXT on layer LABEL, model space").
+   **If the `count` in the dump does not match what the user described, halt.** Do not
+   edit. Report the discrepancy and ask the user to re-select or explain the gap — a set
+   that is wrong before the edit is wrong after it.
 4. **Operate by handle list.** Handles survive an intervening command, the dispatch
    boundary, and the ~128 open-selection-set ceiling. `(ssget "_P")` survives none of
    those — it is whatever command ran last, which is not necessarily what he meant.
@@ -81,9 +76,20 @@ memory matched 0 of 152 labels and cost three round trips to correct.
 `mcp:guard` is not a courtesy — it is what makes the wrong-document edit impossible rather
 than merely checked-for. Pass the document suffix (`"DI-02"`) and the tab (`"Model"`, or a
 layout name) and the verb refuses with `WRONG-DOC` instead of editing, naming what it
-found. **Fold the assertion into the edit; do not spend a turn asking him to confirm focus
-and another verifying it.** When he genuinely must click a tab, give him the whole sequence
-up front rather than one round trip per tab.
+found. **Every LISP snippet that mutates the drawing — whether a named verb or hand-written
+AutoLISP — must begin with the guard:**
+
+```lisp
+(if (not (mcp:guard "DI-02" "Model"))
+  (mcp:wrong-doc "DI-02" "Model")
+  (progn
+    ; ... edit goes here
+  ))
+```
+
+where the string literals match the active target (`dwg` suffix and tab name). Do not fold
+a guard-free snippet into the session and assume the named verbs cover it. When the user
+genuinely must click a tab, give the whole sequence up front rather than one round trip per tab.
 
 Space is not a detail, and it bites edits as hard as probes:
 
@@ -95,6 +101,11 @@ Space is not a detail, and it bites edits as hard as probes:
 
 Filter `ssget "_X"` with `(cons 410 "Model")` — or `(67 . 0)` model / `(67 . 1)` paper — or
 call `(mcp:space-ss "Model")`. Start from `(getvar "CTAB")` if you don't know what's live.
+
+**Whenever the target is a layout tab or paper space, use the `-in` form explicitly:**
+`(mcp:bbox-by-layer-in "Layout1")`, `(mcp:grid-map-in 24 16 "Layout1")`,
+`(mcp:text-dump-in "Layout1")`. The bare form silently scans model space and returns
+plausible-looking wrong answers on a composed sheet.
 
 **To back out an edit, use `drawing(undo)`** — every verb here opens one named UNDO group,
 so one undo reverses the whole batch exactly. Never reverse a move by moving back: a
@@ -147,11 +158,12 @@ and an unknown name lists the real ones rather than costing a second run.
 
 **Screenshot parameters, in order of effect.** `region=[left,top,right,bottom]` crops
 *before* the downscale, so a 500x400 detail crop is ~270 tokens and *sharper* than the
-whole window at 1280 — use it for any detail check. `save_to="….png"` writes to disk and
-attaches nothing, costing no context. `max_dimension` (default 1280, clamped 64–2576);
-halving it roughly quarters the cost. Every capture reports `est_tokens`. Two non-levers:
-`quality` (JPEG) shrinks bytes, not tokens, and nothing above 2576 px survives the vision
-API's own downscale.
+whole window at 1280. **Default for any detail check: always pass `region=[l,t,r,b]`.**
+Only omit `region` when the question genuinely requires the full window (layout read,
+match-to-reference-photo). `save_to="….png"` writes to disk and attaches nothing, costing
+no context. `max_dimension` (default 1280, clamped 64–2576); halving it roughly quarters
+the cost. Every capture reports `est_tokens`. Two non-levers: `quality` (JPEG) shrinks
+bytes, not tokens, and nothing above 2576 px survives the vision API's own downscale.
 
 Reserve a full-window capture for what only pixels answer — does the layout read
 correctly, is there unwanted overlap, does it match a reference photo. Batch to a
@@ -175,13 +187,19 @@ itself repeatedly is more expensive and lossier than a clean handoff.
 
 ## When something is wrong
 
-Three that come up most: `preflight` reporting `select: false` or `probes: false` →
-`system(operation="init")`. `(mcp:sel)` empty → nothing was handed over, ask for `HS` +
-Enter, don't guess. A `WRONG-DOC` refusal → it already names the actual `dwg`/`ctab`,
-so use those rather than spending a round trip re-probing.
+| Symptom | Required Action |
+|---|---|
+| `preflight` `select: false` or `probes: false` | `system(operation="init")` |
+| `(mcp:sel)` returns nil / empty | Ask for `HS` + Enter handoff. Do NOT attempt re-selection — it never survives the dispatch boundary. |
+| `WRONG-DOC` refusal | Update target to `actual_dwg` / `actual_tab` from the payload. No re-probe. |
+| `UNRESOLVED-REF` | Verify the reference entity's coordinates in the `(mcp:sel-dump)` payload before retrying align. |
+| Probe payload `truncated: true` (`truncated_reason: "max_entities"` or `"time"`) | Narrow the scan: switch to the `-in` form, add a layer filter, or split the region. |
+| Dispatch timeout / "Screenshot capture failed" | `system(operation="init")` re-acquires the window handle. |
+| `execute_lisp` hangs (ActiveX) | Follow `references/activex-and-lisp-limits.md` recovery steps. Do not retry blindly — a blind retry can double-apply. |
+| `drawing(operation="save_as")` → "Unknown drawing operation" | Use `drawing(operation="save", data={"path": …})` instead. |
 
-Everything else — dispatcher hangs, stale definitions, purge and `CLAYER` oddities,
-`claude mcp add` in PowerShell — is in `references/troubleshooting.md`.
+Purge / `CLAYER` oddities, stale definitions, `claude mcp add` in PowerShell — see
+`references/troubleshooting.md`.
 
 ## References
 
