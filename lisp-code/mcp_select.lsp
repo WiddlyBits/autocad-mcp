@@ -143,7 +143,7 @@
    Whether this ever fires is an open question on LT - see mcp:reactor-init.
    It is written to be harmless if it does not: it only ever writes a global."
   (setq gf (ssgetfirst))
-  (if (car gf) (setq *mcp-pickfirst* (mcp:handles-of (car gf))))
+  (if (cadr gf) (setq *mcp-pickfirst* (mcp:handles-of (cadr gf))))
   (princ)
 )
 
@@ -172,9 +172,11 @@
    the stash is not clobbered by whatever command runs next - which matters,
    because the next command to run is always the dispatcher."
   (setq gf (ssgetfirst))
-  (if (car gf)
+  (setq ss (cadr gf))
+  (if (null ss) (setq ss (ssget "_I")))
+  (if ss
     (progn
-      (setq *mcp-sel* (mcp:handles-of (car gf)))
+      (setq *mcp-sel* (mcp:handles-of ss))
       (setq n (length *mcp-sel*))
       (princ (strcat "\nHanded off " (itoa n) " object"
                      (if (= n 1) "" "s") " to the MCP."))
