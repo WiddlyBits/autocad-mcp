@@ -82,6 +82,56 @@ there is a non-obvious character after the comma; `"Bank #*Point #"` matched all
 the literal strings first (`(mcp:sel-dump)` or `(mcp:text-dump-in "Model")`), then write
 the pattern.
 
+## Rebuilding an entity: the space trap, the silent revert, and the escape hatch
+
+Found on 2026-09-05 converting DI-02's 32 MTEXT labels to Title Case. All three bit in one
+session, and the first one shipped a "verified" save of a broken drawing.
+
+**`entmakex` appends to the current space, not the space of the entity you copied.** Reading a
+model-space MTEXT's group codes, `entdel`-ing it, and `entmakex`-ing a replacement while the
+`11x17` layout tab is current puts the replacement in *paper* space. Every cheap check passes —
+text, width, layer, insertion point, and the `ssget "_X"` layer count are all identical —
+because the only field that changed is the one nothing was looking at:
+
+```
+EF0  67=0 410=Model     ; original
+1DB3 67=1 410=11x17     ; the "identical" replacement
+```
+
+On a sheet whose model space is viewed through a scaled viewport, that renders the label at
+paper scale — `0.25` height becomes 0.25 *inches on the sheet*, roughly 30x oversized and
+parked off the drawing. Switch space explicitly, restore the tab, and check `67` on the result:
+
+```lisp
+(setq oldtab (getvar "CTAB"))
+(setvar "CTAB" "Model")               ; entmakex now targets model space
+(setq ne (entmakex (list (cons 0 "MTEXT") (cons 100 "AcDbEntity") (cons 67 0) ...)))
+(setvar "CTAB" oldtab)
+(cdr (assoc 67 (entget ne)))          ; must be 0
+```
+
+**`entmod` on MTEXT group 41 can report success and silently revert.** Four labels held a
+defined width of `9.24774` that would not move. `entmod` with a substituted `(41 . 3.37387)`
+returned without error; `vla-put-Width` — a property setter on an existing object, the kind
+that normally works fine in LT — also returned success. Both read back as `9.24774` after
+`REGENALL`. The entities carried no xdata, no extension dictionary and no column groups to
+explain it, and `41` matched `42` exactly on entities whose text differed in length, so the
+value was not content-derived either. Delete-and-recreate is the only fix that holds — which
+is exactly why the space trap above matters.
+
+The visible symptom of a stuck-wide MTEXT is **a fragment of the text split off and floating**
+elsewhere on the sheet: on DI-02 the trailing word `Open` rendered out in the ladder area,
+detached from its label. Text content and entity count both read clean while that is on
+screen — only pixels or group `41` catch it.
+
+**`entdel` toggles, and that is the undo.** Calling `entdel` on an already-erased entity
+*restores* it, and erased entities survive an intervening `QSAVE` for the rest of the session.
+That is what made a bad rebuild recoverable: un-erase the eight originals, delete the eight
+replacements, lose nothing. Note the asymmetry it creates — `handent` on an erased entity
+returns a usable ename whose `entget` is `nil`, so a loop doing
+`(cdr (assoc 41 (entget (handent h))))` dies with `bad argument type: numberp: nil` rather
+than reporting a missing entity. Test `(null (entget e))` to tell erased from live.
+
 ## Working AutoLISP patterns
 
 **Unlock all locked layers before a mass delete** (a locked layer will fail

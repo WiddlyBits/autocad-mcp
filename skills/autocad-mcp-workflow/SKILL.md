@@ -98,9 +98,17 @@ Space is not a detail, and it bites edits as hard as probes:
 | `ssget "_X"` | **neither** — spans model *and* paper | a "move everything" swept the border too |
 | `ssget "_C"`, `PASTECLIP`, `ZOOM` | `CTAB` | pasted 16 labels into the `11x17` tab |
 | `mcp:bbox-by-layer-in`, `mcp:grid-map-in`, `mcp:text-dump-in` | their argument | a bare call means model space |
+| `entmake`, `entmakex` | `CTAB` | 8 MTEXT rebuilt from model-space originals landed in paper space |
 
 Filter `ssget "_X"` with `(cons 410 "Model")` — or `(67 . 0)` model / `(67 . 1)` paper — or
 call `(mcp:space-ss "Model")`. Start from `(getvar "CTAB")` if you don't know what's live.
+
+**Rebuilding an entity puts it in the current space, not the one it came from.** `entmakex`
+appends to whatever `CTAB` is live, so recreating a model-space entity while a layout tab is
+current silently lands it in paper space — same coordinates, same height, wrong space. Set
+`(setvar "CTAB" "Model")` first and restore the tab after. **Verify with group `67`/`410` on
+the result, not with text, width and entity count** — all three read clean on an entity that
+is in the wrong space. See `references/activex-and-lisp-limits.md`.
 
 **Whenever the target is a layout tab or paper space, use the `-in` form explicitly:**
 `(mcp:bbox-by-layer-in "Layout1")`, `(mcp:grid-map-in 24 16 "Layout1")`,
@@ -208,7 +216,8 @@ Purge / `CLAYER` oddities, stale definitions, `claude mcp add` in PowerShell —
 - `references/tool-reference.md` — the full tool surface, `mcp_select.lsp`'s API, and
   selection techniques for 20–30 K entity drawings
 - `references/activex-and-lisp-limits.md` — LT's ActiveX limits, hang recovery, `.scr`
-  batching, and four ways a raw AutoLISP call gets thrown away
+  batching, four ways a raw AutoLISP call gets thrown away, and the traps in rebuilding an
+  entity (wrong space, silent revert, `entdel` as the undo)
 - `references/setup-and-autoload.md` — APPLOAD, restarts, MCP registration
 - `references/troubleshooting.md` — symptom table
 - `references/why-this-skill-exists.md` — the measurements behind every rule above
