@@ -3,6 +3,9 @@
 Third-party open source cloned from `puran-water/autocad-mcp`. Gianni has no relationship with the
 author (`hvkshetry`) and cannot request permissions on the upstream repo.
 
+Before running more than 2-3 find/ls sweeps hunting for a source file, ask Gianni for the
+path instead — Dropbox layouts change and blind search costs 10x a question.
+
 ## Tests
 
 ```bash
@@ -83,6 +86,17 @@ Exact payload signatures — match these without re-reading the LSP files:
 - **`UNRESOLVED-REF`** — `{"ok":false,"error":"UNRESOLVED-REF","ref":…}`. The reference coordinate was not found in the selection set; check `(mcp:sel-dump)` coordinates before retrying.
 - **Probe truncation** — `"truncated":true,"truncated_reason":"max_entities"|"time"`. Fix: switch to the `-in` form with a specific layer or tighter region.
 - **sel-dump truncation** — `"truncated":true` in the sel-dump payload (count > `*mcp-max-selection*` = 200). Re-select a tighter set.
+- **Long inline LISP breaks JSON** — any `execute_lisp` body with nested double-quotes beyond 2 levels, or longer than ~400 bytes, must be written to a temp `.lsp` file and loaded via `(load "path")` — never inlined. Inlining at that size breaks JSON envelope parsing, not just costs round-trips.
+
+## Drawing switches
+
+Before issuing any batch of commands to a target drawing, call `system(get_active_document)` first
+and confirm it matches the target. If it doesn't match, resolve focus **once** before the batch —
+not per command inside it.
+
+The current guard-and-retry pattern fires `mcp:guard` correctly but generates 20–24 WRONG-DOC
+round-trips per session when focus drifts. A single pre-check before the batch eliminates those
+retries entirely.
 
 ## Screenshot cost controls
 
