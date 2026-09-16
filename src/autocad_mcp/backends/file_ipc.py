@@ -291,7 +291,10 @@ class FileIPCBackend(AutoCADBackend):
         return await self._dispatch("undo", {})
 
     async def redo(self) -> CommandResult:
-        return await self._dispatch("redo", {})
+        return CommandResult(
+            ok=False,
+            error="Redo is not available through MCP dispatch — the dispatch command clears the redo stack",
+        )
 
     # --- Freehand LISP execution ---
 

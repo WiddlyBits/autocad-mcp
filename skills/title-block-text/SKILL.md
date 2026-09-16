@@ -108,48 +108,55 @@ column extension) because AutoCAD uses the defined height as a column height.
 At h=0.100 with group 43=0.272 (the template default): 2 lines fit (2×0.100=0.200),
 3 lines do not (3×0.100=0.300 > 0.272). Line 3 escapes to the phantom column.
 
-### Fix
+### Why entmod alone cannot fix this
 
-**Option A — reduce char height** so all n lines fit within the existing group 43:
+AutoCAD LT maintains a locked ratio `group43 / group40 = constant`. When you change
+group 40 (char height) via `entmod`, AutoCAD silently recalculates group 43 proportionally.
+When you then try to set group 43 directly via `entmod`, AutoCAD silently ignores it and
+it snaps back to `old_group43 × (new_h / old_h)`. Verified 2026-09-09 on AI-01: the ratio
+was 2.72 — meaning 3 lines (ratio 3.0) will overflow at any char height via this path.
 
-```
-char_height ≤ group43 / n_lines
-```
+**Do not attempt Option B (increase group 43 via entmod) — it will not take.**
 
-Round down to 2 decimal places. For the Title cell (group 43 ≈ 0.272, n=3):
-`0.272 / 3 = 0.0907` → use **h = 0.08** (3 × 0.08 = 0.24 ≤ 0.272 ✓ and ≤ cell height 0.247 ✓).
+### Fix: reduce char height and rebuild with entmakex
 
-**Option B — increase group 43** to fit n lines at the current char height, capped by
-the cell height (0.247 for Title/Revision No.):
+Reduce char height so `n_lines × h` comfortably fits. For the Title cell (n=3):
+use **h = 0.08** (3 × 0.08 = 0.24 ≤ cell height 0.247 ✓).
 
-```
-new_group43 = min(n_lines × char_height + small_margin, cell_height)
-```
-
-For n=3, h=0.09: new_group43 = min(0.27+0.005, 0.247) = 0.247. But 0.27 > 0.247, so
-you still need to reduce h. Use Option A first.
-
-### LISP pattern for the fix
-
-Write LISP over ~400 bytes or with nested quotes to a temp .lsp file, not inline.
-Below is the atomic entmod pattern (single entity, under 400 bytes):
+Because `entmod` for group 43 is silently refused, **rebuild the entity via `entmakex`**.
+AutoCAD will auto-set group 43 based on the new rendered text height — which will be ≥ n×h
+so no phantom column forms. Write this to `C:/temp/fix_title_mtext.lsp` (it is >400 bytes):
 
 ```lisp
-(if (not (mcp:guard "AI-01 Draft 1.dwg" "11x17"))
-  (mcp:wrong-doc "AI-01 Draft 1.dwg" "11x17")
+; Run as: (load "C:/temp/fix_title_mtext.lsp")
+(if (not (mcp:guard "<SUFFIX>" "11x17"))
+  (mcp:wrong-doc "<SUFFIX>" "11x17")
   (progn
     (setq ent (handent (car (mcp:sel))))
     (setq d (entget ent))
-    (setq d (subst (cons 40 0.08)     (assoc 40 d) d))  ; char height
-    (setq d (subst (cons 41 1.907)    (assoc 41 d) d))  ; ref width (reset if bloated)
-    (setq d (subst (cons 43 0.240)    (assoc 43 d) d))  ; defined height (3 lines × 0.08)
-    (entmod d)
-    (entupd ent)
-    "done"))
+    (setq d (subst (cons 40 0.08)  (assoc 40 d) d))
+    (setq d (subst (cons 41 1.907) (assoc 41 d) d))
+    (setq d (subst (cons 43 0.244) (assoc 43 d) d))  ; AutoCAD ignores this but include anyway
+    (setq d (vl-remove-if
+              (function (lambda (pair)
+                (member (car pair) (list -1 -2 5 102 330 360))))
+              d))
+    (command "_.UNDO" "_M")  ; one mark so one undo reverses delete+create
+    (setq newent (entmakex d))
+    (if newent
+      (progn
+        (entdel ent)
+        (list "ok"
+              (cdr (assoc 40 (entget newent)))
+              (cdr (assoc 41 (entget newent)))
+              (cdr (assoc 43 (entget newent)))))
+      "entmakex-failed")))
 ```
 
-After this, take a crop screenshot to confirm the third line has rejoined the title cell.
-Use `drawing(undo)` to revert if the text is still wrong — entmod opens one UNDO group.
+Expected result: `("ok" 0.08 1.907 <auto-value>)` where auto-value ≥ 0.24.
+The old handle is gone — re-locate via ssget (see Rule 1) for any subsequent edits.
+
+To revert: `drawing(undo)` once (reverses entdel + entmakex as one group).
 
 ---
 
@@ -183,16 +190,71 @@ After the entmod, climb the ladder before reaching for pixels:
 
 ---
 
+## Rule 6: fixing bottom overflow after the entmakex rebuild
+
+After the entmakex fix, the phantom column is gone but the text block may still
+**leak below the cell bottom border**. This is a separate problem from the right-side
+overflow: the MTEXT insertion sits below the cell top, leaving less vertical room than the
+cell height implies.
+
+**Title cell geometry (from Rule 2):**
+- Insertion y = −0.2113 (TC anchor)
+- Cell bottom y = −0.4386
+- Available from insertion to bottom: **0.227 units**
+
+At h=0.08 with default line spacing (group 73=1 "at least", group 44=1.0), 3 lines render
+≈ 0.346 tall — leaking ~0.12 units below the cell. AutoCAD auto-sets group 43 ≈ 0.351 to
+match, which confirms the overflow is ~0.12 units.
+
+### Fix: tighten line spacing via entmod (this DOES work, unlike group 43)
+
+Groups 73 and 44 are not proportionally locked and respond correctly to `entmod`. Get the
+new handle via ssget (Rule 1) — the entmakex created a new entity, old handle is gone.
+
+```lisp
+(if (not (mcp:guard "<SUFFIX>" "11x17"))
+  (mcp:wrong-doc "<SUFFIX>" "11x17")
+  (progn
+    (setq ent <handle-from-ssget>)
+    (setq d (entget ent))
+    (if (assoc 44 d)
+      (setq d (subst (cons 44 0.80) (assoc 44 d) d))
+      (setq d (append d (list (cons 44 0.80)))))
+    (if (assoc 73 d)
+      (setq d (subst (cons 73 2) (assoc 73 d) d))
+      (setq d (append d (list (cons 73 2)))))
+    (entmod d)
+    (entupd ent)
+    (list (cdr (assoc 44 (entget ent)))
+          (cdr (assoc 73 (entget ent)))
+          (cdr (assoc 43 (entget ent))))))
+```
+
+Verified 2026-09-09 on AI-01: group 73=2, group 44=0.80 reduced group 43 from 0.351 to
+0.320, bringing "AI 16XI HF" inside the cell bottom. If more tightening is needed, reduce
+group 44 further (0.75 is the next reasonable step). Do not go below ~0.65 — the lines
+will look cramped against each other.
+
+| group 44 | group 43 result | Fits in 0.227? |
+|---|---|---|
+| 1.00 (default) | ≈ 0.351 | No — leaks ~0.12 |
+| 0.80 | ≈ 0.320 | Borderline — last line sits at cell border |
+| 0.70 | ≈ 0.28 | Yes |
+| 0.65 | ≈ 0.26 | Yes — tightest comfortable spacing |
+
+---
+
 ## Quick reference: group codes for MTEXT editing
 
-| Group | Meaning | Typical value |
-|---|---|---|
-| 40 | Char height | 0.100 (or reduced — see Rule 4) |
-| 41 | Reference rectangle width (MTEXT box) | 1.907 for left-column content |
-| 43 | Defined height (column height overflow point) | ≥ n × char_height |
-| 71 | Attachment point (1=TL … 2=TC … 7=BL) | 2 (TC) for left-column content |
-| 73 | Line spacing type (1=at least, 2=exact) | 1 |
-| 44 | Line spacing factor | 1.0 |
+| Group | Meaning | Typical value | entmod writable? |
+|---|---|---|---|
+| 40 | Char height | 0.100 (or reduced — see Rule 4) | Yes — but triggers group 43 recalc |
+| 41 | Reference rectangle width (MTEXT box) | 1.907 for left-column content | Yes |
+| 43 | Defined height (column height overflow point) | auto-set by AutoCAD LT | **No** — silently ignored; use entmakex |
+| 71 | Attachment point (1=TL … 2=TC … 7=BL) | 2 (TC) for left-column content | Yes |
+| 73 | Line spacing type (1=at least, 2=exact) | 1 | Yes |
+| 44 | Line spacing factor | 1.0 | Yes |
 
 Read them: `(setq d (entget ent))` then `(assoc <group> d)`.  
-Write them: `(setq d (subst (cons <group> <value>) (assoc <group> d) d))` then `(entmod d)`.
+Write them: `(setq d (subst (cons <group> <value>) (assoc <group> d) d))` then `(entmod d)`.  
+**Exception:** group 43 requires `entmakex` (see Rule 3).

@@ -339,7 +339,7 @@
 ;; mcp:sel-show - the echo that costs nothing
 ;; -----------------------------------------------------------------------
 
-(defun mcp:sel-show ( / lst ss box dx dy pad p1 p2 n)
+(defun mcp:sel-show ( / lst ss box dx dy pad p1 p2 n saved-cvport)
   "Highlight the handed-over selection AND zoom to it.
 
    The zoom is not a nicety. Highlighting alone was tried on 2026-08-22 on two
@@ -361,7 +361,11 @@
           (setq pad (* *mcp-show-margin* (max dx dy 1.0)))
           (setq p1 (list (- (car box) pad) (- (cadr box) pad)))
           (setq p2 (list (+ (caddr box) pad) (+ (cadddr box) pad)))
+          (setq saved-cvport (getvar "CVPORT"))
           (command "_.ZOOM" "_W" p1 p2)
+          (if (and (= saved-cvport 1) (/= (getvar "CVPORT") 1))
+            (command "_.PSPACE")
+          )
         )
       )
       ;; sssetfirst AFTER the zoom: ZOOM is a command, and a command clears

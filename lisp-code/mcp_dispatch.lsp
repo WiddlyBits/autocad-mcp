@@ -237,7 +237,7 @@
      (command "_.UNDO" "1") (cons T "\"undone\""))
 
     ((= cmd-name "redo")
-     (command "_.REDO") (cons T "\"redone\""))
+     (cons nil "Redo is not available through MCP dispatch — the dispatch command clears the redo stack"))
 
     ;; --- Drawing info ---
     ((= cmd-name "drawing-info")
@@ -899,11 +899,13 @@
   (if (= entity-id "last")
     (progn
       (setq ent (entlast))
-      (if ent (progn (entdel ent) (cons T "\"erased last entity\""))
+      (if (and ent (entget ent))
+        (progn (command "_.ERASE" ent "") (cons T "\"erased last entity\""))
         (cons nil "No entity to erase")))
     (progn
       (setq ent (handent entity-id))
-      (if ent (progn (entdel ent) (cons T (strcat "\"erased " entity-id "\"")))
+      (if (and ent (entget ent))
+        (progn (command "_.ERASE" ent "") (cons T (strcat "\"erased " entity-id "\"")))
         (cons nil (strcat "Entity not found: " entity-id))))
   )
 )
