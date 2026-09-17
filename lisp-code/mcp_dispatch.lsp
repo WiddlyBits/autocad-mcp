@@ -223,7 +223,10 @@
 
 (defun mcp-dispatch-command (cmd-name params-json / result path filedia dxf-before dxf-after doc-before doc-after dbmod)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
-  (cond
+  (if (not (= "" (getvar "CMDNAMES")))
+    (cons nil (strcat "{\"error\":\"command_active\",\"active\":\""
+                      (mcp-escape-string (getvar "CMDNAMES")) "\"}"))
+    (cond
     ;; --- Ping ---
     ((= cmd-name "ping")
      (cons T "\"pong\""))
@@ -642,9 +645,15 @@
     ((= cmd-name "pid-list-symbols")
      (mcp-cmd-pid-list-symbols params-json))
 
+    ;; --- System state snapshot ---
+    ((= cmd-name "system-snapshot")
+     (if (fboundp 'mcp:sys-snapshot)
+       (cons T (mcp:sys-snapshot))
+       (cons nil "mcp_probes.lsp not loaded")))
+
     ;; --- Unknown ---
     (t (cons nil (strcat "Unknown command: " cmd-name)))
-  )
+  ))
 )
 
 ;; -----------------------------------------------------------------------
@@ -784,7 +793,7 @@
   (cons T (strcat "{\"current_layer\":\"" name "\"}"))
 )
 
-(defun mcp-cmd-create-line (params / x1 y1 x2 y2 layer)
+(defun mcp-cmd-create-line (params / x1 y1 x2 y2 layer ed)
   (setq x1 (mcp-json-get-number params "x1"))
   (setq y1 (mcp-json-get-number params "y1"))
   (setq x2 (mcp-json-get-number params "x2"))
@@ -794,10 +803,12 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_LINE" (list x1 y1 0.0) (list x2 y2 0.0) "")
-  (cons T (strcat "{\"entity_type\":\"LINE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"LINE\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-circle (params / cx cy radius layer)
+(defun mcp-cmd-create-circle (params / cx cy radius layer ed)
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq radius (mcp-json-get-number params "radius"))
@@ -806,10 +817,12 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_CIRCLE" (list cx cy 0.0) radius)
-  (cons T (strcat "{\"entity_type\":\"CIRCLE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"CIRCLE\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-polyline (params / pts-str closed layer pairs pt-str cx cy)
+(defun mcp-cmd-create-polyline (params / pts-str closed layer pairs pt-str cx cy ed)
   (setq pts-str (mcp-json-get-string params "points_str"))
   (setq closed (mcp-json-get-string params "closed"))
   (setq layer (mcp-json-get-string params "layer"))
@@ -825,13 +838,14 @@
         (command (list cx cy 0.0))
       )
       (if (= closed "1") (command "_C") (command ""))
-      (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\""
-                      (cdr (assoc 5 (entget (entlast)))) "\"}"))
+      (setq ed (entget (entlast)))
+      (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
     )
   )
 )
 
-(defun mcp-cmd-create-rectangle (params / x1 y1 x2 y2 layer)
+(defun mcp-cmd-create-rectangle (params / x1 y1 x2 y2 layer ed)
   (setq x1 (mcp-json-get-number params "x1"))
   (setq y1 (mcp-json-get-number params "y1"))
   (setq x2 (mcp-json-get-number params "x2"))
@@ -841,10 +855,12 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_RECTANG" (list x1 y1 0.0) (list x2 y2 0.0))
-  (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-text (params / x y text height rotation layer)
+(defun mcp-cmd-create-text (params / x y text height rotation layer ed)
   (setq x (mcp-json-get-number params "x"))
   (setq y (mcp-json-get-number params "y"))
   (setq text (mcp-json-get-string params "text"))
@@ -857,7 +873,9 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_TEXT" "J" "M" (list x y 0.0) height rotation text)
-  (cons T (strcat "{\"entity_type\":\"TEXT\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"TEXT\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
 (defun mcp-cmd-entity-count (params / layer count ent ent-data)
@@ -1096,7 +1114,7 @@
 
 ;; --- Additional entity creation ---
 
-(defun mcp-cmd-create-arc (params / cx cy radius sa ea layer)
+(defun mcp-cmd-create-arc (params / cx cy radius sa ea layer ed)
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq radius (mcp-json-get-number params "radius"))
@@ -1105,7 +1123,9 @@
   (setq layer (mcp-json-get-string params "layer"))
   (if layer (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer)))
   (command "_ARC" "_C" (list cx cy 0.0) (list (+ cx radius) cy 0.0) "_A" (- ea sa))
-  (cons T (strcat "{\"entity_type\":\"ARC\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"ARC\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
 (defun mcp-cmd-create-ellipse (params / cx cy mx my ratio layer)
@@ -1120,7 +1140,7 @@
   (cons T (strcat "{\"entity_type\":\"ELLIPSE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
 )
 
-(defun mcp-cmd-create-mtext (params / x y width text height layer)
+(defun mcp-cmd-create-mtext (params / x y width text height layer ed)
   (setq x (mcp-json-get-number params "x"))
   (setq y (mcp-json-get-number params "y"))
   (setq width (mcp-json-get-number params "width"))
@@ -1130,7 +1150,9 @@
   (setq layer (mcp-json-get-string params "layer"))
   (if layer (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer)))
   (command "_MTEXT" (list x y 0.0) "_H" height "_W" width text "")
-  (cons T (strcat "{\"entity_type\":\"MTEXT\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"MTEXT\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
 (defun mcp-cmd-create-hatch (params / entity-id pattern ent)

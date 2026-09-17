@@ -20,7 +20,7 @@ import pytest
 
 from autocad_mcp.server import mcp
 
-EXPECTED_TOOL_COUNT = 8
+EXPECTED_TOOL_COUNT = 7
 
 
 async def test_all_tools_are_registered():

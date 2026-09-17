@@ -126,6 +126,41 @@
 )
 
 ;; -----------------------------------------------------------------------
+;; Document / space helpers
+;; -----------------------------------------------------------------------
+
+(defun mcp:in-model-space (thunk / saved-tab result)
+  "Call thunk with CTAB forced to Model, restore on exit."
+  (setq saved-tab (getvar "CTAB"))
+  (setvar "CTAB" "Model")
+  (setq result (thunk))
+  (setvar "CTAB" saved-tab)
+  result)
+
+(defun mcp:assert-doc (expected-name)
+  "Returns \"OK\" if DWGNAME matches expected-name (case-insensitive), else a WRONG-DOC list."
+  (if (= (strcase (getvar "DWGNAME")) (strcase expected-name))
+    "OK"
+    (list "WRONG-DOC" (getvar "DWGNAME"))))
+
+(defun mcp:sys-snapshot ( / lp)
+  "Lightweight system-state probe — returns JSON string directly (no file I/O).
+   Returns: dwgname, clayer, unsaved (bool from DBMOD), cmdnames, ctab, lastpoint, errno."
+  (setq lp (getvar "LASTPOINT"))
+  (strcat "{"
+    "\"dwgname\":\"" (mcp:esc (getvar "DWGNAME")) "\""
+    ",\"clayer\":\"" (mcp:esc (getvar "CLAYER")) "\""
+    ",\"unsaved\":" (if (= (getvar "DBMOD") 0) "false" "true")
+    ",\"cmdnames\":\"" (mcp:esc (getvar "CMDNAMES")) "\""
+    ",\"ctab\":\"" (mcp:esc (getvar "CTAB")) "\""
+    ",\"lastpoint\":" (if lp
+                       (strcat "[" (mcp:fmt (car lp)) ","
+                                   (mcp:fmt (cadr lp)) "]")
+                       "null")
+    ",\"errno\":" (itoa (getvar "ERRNO"))
+    "}"))
+
+;; -----------------------------------------------------------------------
 ;; Bounding boxes - a bbox is the list (xmin ymin xmax ymax)
 ;; -----------------------------------------------------------------------
 
@@ -1343,4 +1378,5 @@
 
 (princ "\nmcp_probes.lsp loaded: mcp:extents mcp:bbox-of mcp:bbox-by-layer mcp:text-dump mcp:overlap mcp:grid-map mcp:snapshot")
 (princ "\n  space-explicit forms: mcp:extents-in mcp:bbox-by-layer-in mcp:text-dump-in mcp:overlap-in mcp:grid-map-in mcp:snapshot-in")
+(princ "\n  helpers: mcp:in-model-space mcp:assert-doc mcp:sys-snapshot")
 (princ)
