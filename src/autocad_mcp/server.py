@@ -1,6 +1,6 @@
 """AutoCAD MCP Server v3.1 — 8 consolidated tools with operation dispatch.
 
-Tools: drawing, entity, layer, block, annotation, pid, view, system
+Tools: drawing, entity, layer, block, annotation, view, system
 """
 
 from __future__ import annotations
@@ -383,85 +383,85 @@ async def annotation(
     return await add_screenshot_if_available(result, include_screenshot)
 
 
-# ==========================================================================
-# 6. pid — P&ID operations (CTO library)
-# ==========================================================================
-
-
-@mcp.tool(
-    annotations={"title": "P&ID Operations (CTO Library)", "readOnlyHint": False},
-    structured_output=False,
-)
-@_safe("pid")
-async def pid(
-    operation: str,
-    data: dict | None = None,
-    include_screenshot: bool = False,
-) -> ToolResult:
-    """P&ID drawing with CTO symbol library.
-
-    Operations:
-      setup_layers     — Create standard P&ID layers.
-      insert_symbol    — data: {category, symbol, x, y, scale?, rotation?}
-      list_symbols     — data: {category}
-      draw_process_line — data: {x1, y1, x2, y2}
-      connect_equipment — data: {x1, y1, x2, y2}
-      add_flow_arrow   — data: {x, y, rotation?}
-      add_equipment_tag — data: {x, y, tag, description?}
-      add_line_number  — data: {x, y, line_num, spec}
-      insert_valve     — data: {x, y, valve_type, rotation?, attributes?}
-      insert_instrument — data: {x, y, instrument_type, rotation?, tag_id?, range_value?}
-      insert_pump      — data: {x, y, pump_type, rotation?, attributes?}
-      insert_tank      — data: {x, y, tank_type, scale?, attributes?}
-    """
-    data = data or {}
-    backend = await get_backend()
-
-    if operation == "setup_layers":
-        result = await backend.pid_setup_layers()
-    elif operation == "insert_symbol":
-        result = await backend.pid_insert_symbol(
-            data["category"], data["symbol"], data["x"], data["y"],
-            data.get("scale", 1.0), data.get("rotation", 0.0),
-        )
-    elif operation == "list_symbols":
-        result = await backend.pid_list_symbols(data["category"])
-    elif operation == "draw_process_line":
-        result = await backend.pid_draw_process_line(data["x1"], data["y1"], data["x2"], data["y2"])
-    elif operation == "connect_equipment":
-        result = await backend.pid_connect_equipment(data["x1"], data["y1"], data["x2"], data["y2"])
-    elif operation == "add_flow_arrow":
-        result = await backend.pid_add_flow_arrow(data["x"], data["y"], data.get("rotation", 0.0))
-    elif operation == "add_equipment_tag":
-        result = await backend.pid_add_equipment_tag(data["x"], data["y"], data["tag"], data.get("description", ""))
-    elif operation == "add_line_number":
-        result = await backend.pid_add_line_number(data["x"], data["y"], data["line_num"], data["spec"])
-    elif operation == "insert_valve":
-        result = await backend.pid_insert_valve(
-            data["x"], data["y"], data["valve_type"],
-            data.get("rotation", 0.0), data.get("attributes"),
-        )
-    elif operation == "insert_instrument":
-        result = await backend.pid_insert_instrument(
-            data["x"], data["y"], data["instrument_type"],
-            data.get("rotation", 0.0), data.get("tag_id", ""), data.get("range_value", ""),
-        )
-    elif operation == "insert_pump":
-        result = await backend.pid_insert_pump(
-            data["x"], data["y"], data["pump_type"],
-            data.get("rotation", 0.0), data.get("attributes"),
-        )
-    elif operation == "insert_tank":
-        result = await backend.pid_insert_tank(
-            data["x"], data["y"], data["tank_type"],
-            data.get("scale", 1.0), data.get("attributes"),
-        )
-    else:
-        return _json({"error": f"Unknown pid operation: {operation}"})
-
-    return await add_screenshot_if_available(result, include_screenshot)
-
-
+# [PRUNED-PID] # ==========================================================================
+# [PRUNED-PID] # 6. pid — P&ID operations (CTO library)
+# [PRUNED-PID] # ==========================================================================
+# [PRUNED-PID]
+# [PRUNED-PID]
+# [PRUNED-PID] @mcp.tool(
+# [PRUNED-PID]     annotations={"title": "P&ID Operations (CTO Library)", "readOnlyHint": False},
+# [PRUNED-PID]     structured_output=False,
+# [PRUNED-PID] )
+# [PRUNED-PID] @_safe("pid")
+# [PRUNED-PID] async def pid(
+# [PRUNED-PID]     operation: str,
+# [PRUNED-PID]     data: dict | None = None,
+# [PRUNED-PID]     include_screenshot: bool = False,
+# [PRUNED-PID] ) -> ToolResult:
+# [PRUNED-PID]     """P&ID drawing with CTO symbol library.
+# [PRUNED-PID]
+# [PRUNED-PID]     Operations:
+# [PRUNED-PID]       setup_layers     — Create standard P&ID layers.
+# [PRUNED-PID]       insert_symbol    — data: {category, symbol, x, y, scale?, rotation?}
+# [PRUNED-PID]       list_symbols     — data: {category}
+# [PRUNED-PID]       draw_process_line — data: {x1, y1, x2, y2}
+# [PRUNED-PID]       connect_equipment — data: {x1, y1, x2, y2}
+# [PRUNED-PID]       add_flow_arrow   — data: {x, y, rotation?}
+# [PRUNED-PID]       add_equipment_tag — data: {x, y, tag, description?}
+# [PRUNED-PID]       add_line_number  — data: {x, y, line_num, spec}
+# [PRUNED-PID]       insert_valve     — data: {x, y, valve_type, rotation?, attributes?}
+# [PRUNED-PID]       insert_instrument — data: {x, y, instrument_type, rotation?, tag_id?, range_value?}
+# [PRUNED-PID]       insert_pump      — data: {x, y, pump_type, rotation?, attributes?}
+# [PRUNED-PID]       insert_tank      — data: {x, y, tank_type, scale?, attributes?}
+# [PRUNED-PID]     """
+# [PRUNED-PID]     data = data or {}
+# [PRUNED-PID]     backend = await get_backend()
+# [PRUNED-PID]
+# [PRUNED-PID]     if operation == "setup_layers":
+# [PRUNED-PID]         result = await backend.pid_setup_layers()
+# [PRUNED-PID]     elif operation == "insert_symbol":
+# [PRUNED-PID]         result = await backend.pid_insert_symbol(
+# [PRUNED-PID]             data["category"], data["symbol"], data["x"], data["y"],
+# [PRUNED-PID]             data.get("scale", 1.0), data.get("rotation", 0.0),
+# [PRUNED-PID]         )
+# [PRUNED-PID]     elif operation == "list_symbols":
+# [PRUNED-PID]         result = await backend.pid_list_symbols(data["category"])
+# [PRUNED-PID]     elif operation == "draw_process_line":
+# [PRUNED-PID]         result = await backend.pid_draw_process_line(data["x1"], data["y1"], data["x2"], data["y2"])
+# [PRUNED-PID]     elif operation == "connect_equipment":
+# [PRUNED-PID]         result = await backend.pid_connect_equipment(data["x1"], data["y1"], data["x2"], data["y2"])
+# [PRUNED-PID]     elif operation == "add_flow_arrow":
+# [PRUNED-PID]         result = await backend.pid_add_flow_arrow(data["x"], data["y"], data.get("rotation", 0.0))
+# [PRUNED-PID]     elif operation == "add_equipment_tag":
+# [PRUNED-PID]         result = await backend.pid_add_equipment_tag(data["x"], data["y"], data["tag"], data.get("description", ""))
+# [PRUNED-PID]     elif operation == "add_line_number":
+# [PRUNED-PID]         result = await backend.pid_add_line_number(data["x"], data["y"], data["line_num"], data["spec"])
+# [PRUNED-PID]     elif operation == "insert_valve":
+# [PRUNED-PID]         result = await backend.pid_insert_valve(
+# [PRUNED-PID]             data["x"], data["y"], data["valve_type"],
+# [PRUNED-PID]             data.get("rotation", 0.0), data.get("attributes"),
+# [PRUNED-PID]         )
+# [PRUNED-PID]     elif operation == "insert_instrument":
+# [PRUNED-PID]         result = await backend.pid_insert_instrument(
+# [PRUNED-PID]             data["x"], data["y"], data["instrument_type"],
+# [PRUNED-PID]             data.get("rotation", 0.0), data.get("tag_id", ""), data.get("range_value", ""),
+# [PRUNED-PID]         )
+# [PRUNED-PID]     elif operation == "insert_pump":
+# [PRUNED-PID]         result = await backend.pid_insert_pump(
+# [PRUNED-PID]             data["x"], data["y"], data["pump_type"],
+# [PRUNED-PID]             data.get("rotation", 0.0), data.get("attributes"),
+# [PRUNED-PID]         )
+# [PRUNED-PID]     elif operation == "insert_tank":
+# [PRUNED-PID]         result = await backend.pid_insert_tank(
+# [PRUNED-PID]             data["x"], data["y"], data["tank_type"],
+# [PRUNED-PID]             data.get("scale", 1.0), data.get("attributes"),
+# [PRUNED-PID]         )
+# [PRUNED-PID]     else:
+# [PRUNED-PID]         return _json({"error": f"Unknown pid operation: {operation}"})
+# [PRUNED-PID]
+# [PRUNED-PID]     return await add_screenshot_if_available(result, include_screenshot)
+# [PRUNED-PID]
+# [PRUNED-PID]
 # ==========================================================================
 # 7. view — Viewport and screenshot
 # ==========================================================================
@@ -550,6 +550,7 @@ async def view(
             "width": result.payload["width"],
             "height": result.payload["height"],
             "est_tokens": result.payload["est_tokens"],
+            "hint": None,
         }
 
         if save_to:
