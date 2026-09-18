@@ -26,6 +26,12 @@ hand-rolled AutoLISP and nothing says so. That is the most likely explanation fo
 called all day. Run `init` at the start of a session, and check the `preflight` block it
 returns.
 
+**In a fresh session, `system(status)` will show `select: false` and `reactor_fn: false`
+even when `mcp_dispatch.lsp` loaded correctly.** This is expected — `mcp_probes.lsp` and
+`mcp_select.lsp` are not auto-loaded; only the dispatcher is. Call
+`system(operation="init")` before any selection- or reactor-dependent work. The first
+`status` call confirming `select: true` is the green light. Field-confirmed 2026-09-18.
+
 This persists in the registry
 (`HKCU:\SOFTWARE\Autodesk\AutoCAD LT\R33\ACADLT-A101:409\Profiles\<<Unnamed Profile>>\Dialogs\Appload\Startup`
 as `NumStartup`/`1Startup`), so it survives restarts. Reading those registry values is

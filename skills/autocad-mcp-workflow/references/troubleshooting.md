@@ -6,7 +6,7 @@ every request in it.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `preflight` says `select: false` or `probes: false` | libraries not loaded in this document | `system(operation="init")` |
+| `preflight` says `select: false` or `probes: false` | libraries not loaded — normal state at the start of every session before `init` runs, or after an AutoCAD restart | `system(operation="init")` |
 | `system(status)` says dispatch not loaded | `mcp_dispatch.lsp` isn't in the *current* document | `setup-and-autoload.md` — APPLOAD Startup Suite, not `acaddoc.lsp` |
 | `(mcp:sel)` returns nothing | nothing was handed over | ask for `HS` + Enter (Rule 1). Don't guess, and don't ask him to re-select in the hope the grip selection survives this time — it never does |
 | A verb returns `WRONG-DOC` | focus is on another document or tab | the payload names the actual `dwg`/`ctab` — use those, don't spend a round trip re-probing |
