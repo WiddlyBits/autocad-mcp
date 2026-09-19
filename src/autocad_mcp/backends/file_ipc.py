@@ -181,6 +181,18 @@ class FileIPCBackend(AutoCADBackend):
         result_file = self._ipc_dir / f"autocad_mcp_result_{request_id}.json"
         tmp_file = cmd_file.with_suffix(".tmp")
 
+        # Detect and remove leftover IPC files from a previous timed-out dispatch.
+        # ESC injection is targeted: only fired when stale files are present, not
+        # unconditionally. Blanket ESC was interrupting user commands (A-4 T2).
+        stale = self._check_stale_ipc_files()
+        if stale:
+            log.warning("stale_ipc_recovery", stale_count=len(stale), command=command)
+            for f in stale:
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
         self._write_status(f"busy:{command}")
         try:
             # Strip None values — the simple LISP JSON parser can't handle null
@@ -195,8 +207,8 @@ class FileIPCBackend(AutoCADBackend):
             tmp_file.write_text(json.dumps(payload), encoding="utf-8")
             tmp_file.rename(cmd_file)
 
-            # Type the fixed dispatch trigger
-            self._type_dispatch_trigger()
+            # Type the fixed dispatch trigger; ESC only when recovering from stale state
+            self._type_dispatch_trigger(inject_esc=bool(stale))
 
             # Poll for result
             deadline = time.time() + TIMEOUT
@@ -238,6 +250,22 @@ class FileIPCBackend(AutoCADBackend):
                 except OSError:
                     pass
 
+    def _check_stale_ipc_files(self) -> list[Path]:
+        """Return leftover IPC files from a previous timed-out dispatch.
+
+        Called at the start of every dispatch before any files are written for
+        the current request, so any match predates the current call. Presence
+        of these files means a prior timed-out mutating dispatch may have left
+        AutoCAD mid-command and ESC recovery is warranted.
+        """
+        found: list[Path] = []
+        try:
+            for pattern in ("autocad_mcp_cmd_*.json", "autocad_mcp_result_*.json"):
+                found.extend(self._ipc_dir.glob(pattern))
+        except OSError:
+            pass
+        return found
+
     def _find_command_line_hwnd(self) -> int | None:
         """Find AutoCAD's MDIClient child window for command routing."""
         if sys.platform != "win32" or not self._hwnd:
@@ -258,11 +286,13 @@ class FileIPCBackend(AutoCADBackend):
         except Exception:
             return None
 
-    def _type_dispatch_trigger(self):
+    def _type_dispatch_trigger(self, inject_esc: bool = False) -> None:
         """Post '(c:mcp-dispatch)' + Enter via WM_CHAR to MDIClient — no focus steal.
 
-        Sends ESC keystrokes first to cancel any stale pending command
-        (e.g. from a previous timeout leaving AutoCAD in a command prompt).
+        inject_esc: send 2×ESC before dispatching to cancel a stale pending
+        command. Only True when _check_stale_ipc_files() found leftover files,
+        indicating a prior timed-out dispatch may have left AutoCAD mid-command.
+        Not injected on clean dispatches to avoid interrupting user commands.
         """
         try:
             import ctypes
@@ -274,11 +304,12 @@ class FileIPCBackend(AutoCADBackend):
             target = self._command_hwnd or self._hwnd
             post = ctypes.windll.user32.PostMessageW
 
-            # Cancel any pending command (2x ESC for nested commands)
-            for _ in range(2):
-                post(target, WM_KEYDOWN, VK_ESCAPE, 0)
-                post(target, WM_KEYUP, VK_ESCAPE, 0)
-            time.sleep(0.05)
+            if inject_esc:
+                # Cancel stale pending command (2x ESC for nested commands)
+                for _ in range(2):
+                    post(target, WM_KEYDOWN, VK_ESCAPE, 0)
+                    post(target, WM_KEYUP, VK_ESCAPE, 0)
+                time.sleep(0.05)
 
             for ch in "(c:mcp-dispatch)":
                 post(target, WM_CHAR, ord(ch), 0)
@@ -402,6 +433,26 @@ class FileIPCBackend(AutoCADBackend):
         return await self._dispatch("execute-lisp", {
             "code_file": str(code_file).replace("\\", "/")
         })
+
+    async def assert_doc(self, expected_name: str) -> CommandResult:
+        """Verify the active drawing matches expected_name before a batch.
+
+        Calls (mcp:assert-doc ...) from mcp_probes.lsp.
+        Returns ok:True  when names match (case-insensitive, per the LISP impl).
+        Returns ok:False with error "wrong_doc" when they differ, carrying
+        {"expected": ..., "actual": <raw LISP payload>} in payload.
+        Propagates any execute_lisp error (e.g. probes not loaded) unchanged.
+        """
+        result = await self.execute_lisp(f'(mcp:assert-doc "{expected_name}")')
+        if not result.ok:
+            return result
+        if result.payload == "OK":
+            return CommandResult(ok=True, payload={"doc": expected_name})
+        return CommandResult(
+            ok=False,
+            error="wrong_doc",
+            payload={"expected": expected_name, "actual": str(result.payload)},
+        )
 
     # --- Library loading and preflight ---
 

@@ -104,6 +104,9 @@ class AutoCADBackend(ABC):
     async def execute_lisp(self, code: str) -> CommandResult:
         return CommandResult(ok=False, error="Not supported on this backend")
 
+    async def assert_doc(self, expected_name: str) -> CommandResult:
+        return CommandResult(ok=False, error="Not supported on this backend")
+
     async def load_libraries(self) -> CommandResult:
         """Load the .lsp helper libraries into the running document.
 

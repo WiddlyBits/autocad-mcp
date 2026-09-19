@@ -519,6 +519,152 @@ class TestSemicolonEncoding:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# assert_doc response parsing
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Stale IPC file detection (A-4 Phase 2B)
+# ---------------------------------------------------------------------------
+
+
+class TestStaleIpcDetection:
+    """_check_stale_ipc_files detects leftover files from timed-out dispatches."""
+
+    def _backend_with_tmpdir(self, tmpdir: str):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._ipc_dir = Path(tmpdir)
+        return backend
+
+    def test_no_stale_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backend = self._backend_with_tmpdir(tmpdir)
+            assert backend._check_stale_ipc_files() == []
+
+    def test_stale_cmd_file_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stale = Path(tmpdir) / "autocad_mcp_cmd_abc123def456.json"
+            stale.write_text('{"request_id": "abc123def456"}')
+            backend = self._backend_with_tmpdir(tmpdir)
+            found = backend._check_stale_ipc_files()
+            assert len(found) == 1
+            assert found[0] == stale
+
+    def test_stale_result_file_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stale = Path(tmpdir) / "autocad_mcp_result_deadbeef1234.json"
+            stale.write_text('{"ok": true}')
+            backend = self._backend_with_tmpdir(tmpdir)
+            found = backend._check_stale_ipc_files()
+            assert len(found) == 1
+            assert found[0] == stale
+
+    def test_multiple_stale_files_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name in (
+                "autocad_mcp_cmd_111111111111.json",
+                "autocad_mcp_result_222222222222.json",
+            ):
+                (Path(tmpdir) / name).write_text("{}")
+            backend = self._backend_with_tmpdir(tmpdir)
+            assert len(backend._check_stale_ipc_files()) == 2
+
+    def test_unrelated_files_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "some_other_file.json").write_text("{}")
+            (Path(tmpdir) / "autocad_mcp_lisp_abc123.lsp").write_text("(+ 1 2)")
+            backend = self._backend_with_tmpdir(tmpdir)
+            assert backend._check_stale_ipc_files() == []
+
+    def test_nonexistent_ipc_dir_returns_empty(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._ipc_dir = Path("C:/does/not/exist/at/all")
+        assert backend._check_stale_ipc_files() == []
+
+
+class TestConditionalEscInjection:
+    """_type_dispatch_trigger only injects ESC when inject_esc=True."""
+
+    def test_inject_esc_false_by_default(self):
+        import inspect
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        sig = inspect.signature(FileIPCBackend._type_dispatch_trigger)
+        assert sig.parameters["inject_esc"].default is False
+
+    def test_inject_esc_parameter_exists(self):
+        import inspect
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        sig = inspect.signature(FileIPCBackend._type_dispatch_trigger)
+        assert "inject_esc" in sig.parameters
+
+
+class TestAssertDoc:
+    """Unit tests for assert_doc Python-side parsing — no AutoCAD needed."""
+
+    @pytest.mark.asyncio
+    async def test_ok_response(self):
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(ok=True, payload="OK")
+            result = await backend.assert_doc("ECSI Border Template - Blank.dwg")
+        assert result.ok is True
+        assert result.payload["doc"] == "ECSI Border Template - Blank.dwg"
+
+    @pytest.mark.asyncio
+    async def test_wrong_doc_response(self):
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(ok=True, payload='("WRONG-DOC" "Drawing1.dwg")')
+            result = await backend.assert_doc("ECSI Border Template - Blank.dwg")
+        assert result.ok is False
+        assert result.error == "wrong_doc"
+        assert result.payload["expected"] == "ECSI Border Template - Blank.dwg"
+        assert "Drawing1.dwg" in result.payload["actual"]
+
+    @pytest.mark.asyncio
+    async def test_lisp_error_propagated(self):
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(
+                ok=False, error="LISP error: no function definition: MCP:ASSERT-DOC"
+            )
+            result = await backend.assert_doc("drawing.dwg")
+        assert result.ok is False
+        assert "MCP:ASSERT-DOC" in result.error
+
+    @pytest.mark.asyncio
+    async def test_vlax_guard_propagated(self):
+        """assert_doc doesn't use vlax-, but execute_lisp errors should pass through."""
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(
+                ok=False, error="timeout_mutating", payload={"may_have_applied": True}
+            )
+            result = await backend.assert_doc("drawing.dwg")
+        assert result.ok is False
+        assert result.error == "timeout_mutating"
+
+    @pytest.mark.asyncio
+    async def test_base_backend_returns_not_supported(self):
+        from autocad_mcp.backends.ezdxf_backend import EzdxfBackend
+        backend = EzdxfBackend()
+        await backend.initialize()
+        result = await backend.assert_doc("any.dwg")
+        assert result.ok is False
+        assert "Not supported" in result.error
+
+
 class TestVariableNameStripping:
     def test_strip_dollar_prefix(self):
         """File IPC strips $ prefix from ezdxf-style variable names."""
