@@ -169,6 +169,21 @@ class FileIPCBackend(AutoCADBackend):
 
     # --- IPC dispatch ---
 
+    def _reacquire_hwnd(self) -> bool:
+        """Re-find the AutoCAD window after a restart. Returns True if acquired."""
+        hwnd = find_autocad_window()
+        if not hwnd:
+            return False
+        self._hwnd = hwnd
+        self._command_hwnd = self._find_command_line_hwnd()
+        try:
+            from autocad_mcp.screenshot import Win32ScreenshotProvider
+            self._screenshot_provider = Win32ScreenshotProvider(self._hwnd)
+        except Exception:
+            pass
+        log.info("hwnd_reacquired", hwnd=self._hwnd, command_hwnd=self._command_hwnd)
+        return True
+
     async def _dispatch(self, command: str, params: dict) -> CommandResult:
         """Send a command via file IPC and wait for result."""
         async with self._lock:
@@ -192,6 +207,19 @@ class FileIPCBackend(AutoCADBackend):
                     f.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+        # Verify the cached hwnd is still valid. PostMessageW to a dead handle
+        # fails silently — the cmd file is written but AutoCAD never receives the
+        # keystroke, so the dispatch times out with no other indication.
+        if sys.platform == "win32":
+            try:
+                import win32gui
+                if self._hwnd is None or not win32gui.IsWindow(self._hwnd):
+                    log.warning("stale_hwnd_detected", hwnd=self._hwnd)
+                    if not self._reacquire_hwnd():
+                        return CommandResult(ok=False, error="autocad_not_found")
+            except ImportError:
+                pass
 
         self._write_status(f"busy:{command}")
         try:

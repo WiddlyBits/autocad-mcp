@@ -682,3 +682,84 @@ class TestVariableNameStripping:
         names = None
         names_str = "" if not names else ";".join(names)
         assert names_str == ""
+
+
+class TestStaleHwnd:
+    """_reacquire_hwnd transparently recovers from a stale cached window handle."""
+
+    def test_reacquire_updates_hwnd_when_window_found(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        with patch("autocad_mcp.backends.file_ipc.find_autocad_window", return_value=0xBEEF):
+            with patch.object(backend, "_find_command_line_hwnd", return_value=0xCAFE):
+                result = backend._reacquire_hwnd()
+        assert result is True
+        assert backend._hwnd == 0xBEEF
+        assert backend._command_hwnd == 0xCAFE
+
+    def test_reacquire_returns_false_when_autocad_not_found(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        with patch("autocad_mcp.backends.file_ipc.find_autocad_window", return_value=None):
+            result = backend._reacquire_hwnd()
+        assert result is False
+        assert backend._hwnd == 0xDEAD  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_dispatch_reacquires_on_stale_hwnd_then_proceeds(self):
+        import sys
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        dispatch_called = []
+        original_dispatch = FileIPCBackend._dispatch_unlocked
+
+        async def fake_dispatch(self, command, params):
+            dispatch_called.append(command)
+            return CommandResult(ok=True)
+
+        with patch("sys.platform", "win32"):
+            with patch("win32gui.IsWindow", return_value=False):
+                with patch.object(backend, "_reacquire_hwnd", return_value=True) as mock_reacquire:
+                    with patch.object(backend, "_dispatch", new_callable=AsyncMock) as mock_dispatch:
+                        mock_dispatch.return_value = CommandResult(ok=True)
+                        # Directly call _dispatch_unlocked to exercise the guard
+                        with patch.object(backend, "_check_stale_ipc_files", return_value=[]):
+                            with patch.object(backend, "_write_status"):
+                                with patch.object(backend, "_type_dispatch_trigger"):
+                                    import tempfile
+                                    with tempfile.TemporaryDirectory() as tmpdir:
+                                        backend._ipc_dir = Path(tmpdir)
+                                        # Simulate AutoCAD writing the result file
+                                        import uuid as _uuid
+                                        original_uuid = _uuid.uuid4
+
+                                        fixed_id = "aabbccddeeff"
+
+                                        def fake_uuid4():
+                                            class FakeUUID:
+                                                hex = fixed_id
+                                            return FakeUUID()
+
+                                        result_path = Path(tmpdir) / f"autocad_mcp_result_{fixed_id}.json"
+                                        result_path.write_text(
+                                            json.dumps({"ok": True, "request_id": fixed_id})
+                                        )
+                                        with patch("uuid.uuid4", fake_uuid4):
+                                            result = await backend._dispatch_unlocked("ping", {})
+                        mock_reacquire.assert_called_once()
+        assert result.ok is True
+
+    @pytest.mark.asyncio
+    async def test_dispatch_returns_autocad_not_found_when_reacquire_fails(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        with patch("sys.platform", "win32"):
+            with patch("win32gui.IsWindow", return_value=False):
+                with patch.object(backend, "_reacquire_hwnd", return_value=False):
+                    result = await backend._dispatch_unlocked("ping", {})
+        assert result.ok is False
+        assert result.error == "autocad_not_found"
