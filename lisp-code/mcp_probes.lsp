@@ -936,9 +936,19 @@
    check mcp:current-space first - mcp:grid-map does, and switches to
    mcp:grid-raster when they differ. Left as a bare ssget rather than made
    self-checking on purpose: this is the fast path, called once per cell, and
-   a getvar per call is not free."
+   a getvar per call is not free.
+
+   VIEWPORT entities are excluded. A VIEWPORT whose frame extends outside the
+   grid region can still be selected by ssget \"_C\" when a grid cell lies inside
+   the viewport frame (AutoCAD treats the viewport rectangle as a selectable
+   entity). That produces false hits on every row the viewport frame crosses —
+   not diagram content. (cons 0 \"~VIEWPORT\") uses AutoCAD's own tilde
+   wildcard (\"does not match this string\") which is the correct exclusion
+   syntax for string group codes; the -4/<> relational-operator approach does
+   not work for group code 0 in practice."
   (setq ss (ssget "_C" (list x1 y1) (list x2 y2)
-                  (list (cons 410 (mcp:space-name space)))))
+                  (list (cons 0 "~VIEWPORT")
+                        (cons 410 (mcp:space-name space)))))
   (if ss (> (sslength ss) 0) nil)
 )
 
