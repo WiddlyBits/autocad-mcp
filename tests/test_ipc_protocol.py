@@ -7,6 +7,7 @@ and CommandResult serialization.
 
 import json
 import os
+import sys
 import tempfile
 import time
 import uuid
@@ -708,8 +709,8 @@ class TestStaleHwnd:
         assert backend._hwnd == 0xDEAD  # unchanged
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform != "win32", reason="requires pywin32")
     async def test_dispatch_reacquires_on_stale_hwnd_then_proceeds(self):
-        import sys
         from autocad_mcp.backends.file_ipc import FileIPCBackend
         backend = FileIPCBackend()
         backend._hwnd = 0xDEAD
@@ -753,6 +754,7 @@ class TestStaleHwnd:
         assert result.ok is True
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform != "win32", reason="requires pywin32")
     async def test_dispatch_returns_autocad_not_found_when_reacquire_fails(self):
         from autocad_mcp.backends.file_ipc import FileIPCBackend
         backend = FileIPCBackend()
