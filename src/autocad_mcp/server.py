@@ -51,7 +51,7 @@ mcp = FastMCP("autocad-mcp")
 
 
 @mcp.tool(
-    annotations={"title": "AutoCAD Drawing Operations", "readOnlyHint": False},
+    annotations={"title": "AutoCAD Drawing Operations", "readOnlyHint": False, "destructiveHint": True},
     structured_output=False,
 )
 @_safe("drawing")
@@ -123,7 +123,7 @@ async def drawing(
 
 
 @mcp.tool(
-    annotations={"title": "AutoCAD Entity Operations", "readOnlyHint": False},
+    annotations={"title": "AutoCAD Entity Operations", "readOnlyHint": False, "destructiveHint": True},
     structured_output=False,
 )
 @_safe("entity")
@@ -228,7 +228,7 @@ async def entity(
 
 
 @mcp.tool(
-    annotations={"title": "AutoCAD Layer Operations", "readOnlyHint": False},
+    annotations={"title": "AutoCAD Layer Operations", "readOnlyHint": False, "destructiveHint": False},
     structured_output=False,
 )
 @_safe("layer")
@@ -280,7 +280,7 @@ async def layer(
 
 
 @mcp.tool(
-    annotations={"title": "AutoCAD Block Operations", "readOnlyHint": False},
+    annotations={"title": "AutoCAD Block Operations", "readOnlyHint": False, "destructiveHint": False},
     structured_output=False,
 )
 @_safe("block")
@@ -332,7 +332,7 @@ async def block(
 
 
 @mcp.tool(
-    annotations={"title": "AutoCAD Annotation Operations", "readOnlyHint": False},
+    annotations={"title": "AutoCAD Annotation Operations", "readOnlyHint": False, "destructiveHint": False},
     structured_output=False,
 )
 @_safe("annotation")
@@ -591,7 +591,7 @@ async def view(
 
 
 @mcp.tool(
-    annotations={"title": "AutoCAD MCP System", "readOnlyHint": True},
+    annotations={"title": "AutoCAD MCP System", "readOnlyHint": False, "destructiveHint": True},
     structured_output=False,
 )
 @_safe("system")
