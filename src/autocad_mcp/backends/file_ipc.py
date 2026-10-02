@@ -221,6 +221,9 @@ class FileIPCBackend(AutoCADBackend):
             except ImportError:
                 pass
 
+        if self._is_autocad_busy():
+            return CommandResult(ok=False, error="autocad_busy")
+
         self._write_status(f"busy:{command}")
         try:
             # Strip None values — the simple LISP JSON parser can't handle null
@@ -313,6 +316,22 @@ class FileIPCBackend(AutoCADBackend):
             return mdi_client[0] if mdi_client else None
         except Exception:
             return None
+
+    def _is_autocad_busy(self) -> bool:
+        """Return True if AutoCAD's active document is mid-command.
+
+        Best-effort: returns False if COM is unavailable (LT, no pywin32,
+        no document open). Caller must hold _lock so the check is atomic
+        with the subsequent file write.
+        """
+        if sys.platform != "win32":
+            return False
+        try:
+            import win32com.client
+            app = win32com.client.GetActiveObject("AutoCAD.Application")
+            return not app.ActiveDocument.IsQuiescent
+        except Exception:
+            return False
 
     def _type_dispatch_trigger(self, inject_esc: bool = False) -> None:
         """Post '(c:mcp-dispatch)' + Enter via WM_CHAR to MDIClient — no focus steal.
