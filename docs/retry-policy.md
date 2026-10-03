@@ -37,6 +37,27 @@ is **unsafe**. Geometry-creating commands are the most common source of this con
 This mirrors the IMessageFilter pattern in COM-based AutoCAD automation (khs0927): retrying
 rejected/busy-calls is safe; retrying calls that may have committed is not.
 
+### `_MUTATING_COMMANDS` — the fork's IMessageFilter equivalent
+
+`_MUTATING_COMMANDS` (defined in `src/autocad_mcp/backends/file_ipc.py`) is the frozenset that
+classifies which IPC command strings are treated as potentially non-idempotent. Any command in this
+set receives `timeout_mutating` (with `may_have_applied: true`) instead of a plain timeout. The
+set spans five categories:
+
+| Category | Commands |
+|---|---|
+| Geometry creation | `create-line`, `create-circle`, `create-polyline`, `create-rectangle`, `create-arc`, `create-ellipse`, `create-mtext`, `create-hatch`, `create-text`, all `create-dimension-*`, `create-leader` |
+| Entity mutation | `entity-erase`, `entity-move`, `entity-copy`, `entity-rotate`, `entity-scale`, `entity-mirror`, `entity-offset`, `entity-array`, `entity-fillet`, `entity-chamfer` |
+| Block/layer changes | `block-insert`, `block-insert-with-attributes`, `block-update-attribute`, `block-define`, all `layer-*` |
+| Drawing I/O | `drawing-save`, `drawing-save-as-dxf`, `drawing-plot-pdf`, `drawing-purge` |
+| Freehand LISP | `execute-lisp` (treated as mutating because content is opaque) |
+| P&ID | All `pid-*` commands |
+
+**Policy: geometry-creating commands are never safe to auto-retry on timeout.** After a
+`timeout_mutating` from any `create-*` command, inspect drawing state with `entity(count)` or
+`drawing(info)` before re-issuing. A duplicate entity created by a blind retry cannot be
+distinguished from a legitimate second call and has no automatic rollback path.
+
 ---
 
 ## Safe-to-retry codes (detail)
