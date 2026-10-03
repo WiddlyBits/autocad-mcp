@@ -184,8 +184,12 @@ class FileIPCBackend(AutoCADBackend):
         log.info("hwnd_reacquired", hwnd=self._hwnd, command_hwnd=self._command_hwnd)
         return True
 
-    async def _dispatch(self, command: str, params: dict) -> CommandResult:
+    async def _dispatch(self, command: str, params: dict, expected_doc: str | None = None) -> CommandResult:
         """Send a command via file IPC and wait for result."""
+        if expected_doc is not None:
+            pre = await self.assert_doc(expected_doc)
+            if not pre.ok:
+                return pre
         async with self._lock:
             return await self._dispatch_unlocked(command, params)
 
@@ -460,10 +464,11 @@ class FileIPCBackend(AutoCADBackend):
 
     # --- Freehand LISP execution ---
 
-    async def execute_lisp(self, code: str) -> CommandResult:
+    async def execute_lisp(self, code: str, expected_doc: str | None = None) -> CommandResult:
         """Execute arbitrary AutoLISP code via temp file.
 
         File persists for session; cleaned up by _cleanup_stale_files().
+        expected_doc: when provided, assert_doc() runs before the IPC file is written.
         """
         # vlax-* functions are only available in full AutoCAD, not LT.
         # Dispatching a vlax- call on LT causes a dispatch loop hang, so we
@@ -479,7 +484,7 @@ class FileIPCBackend(AutoCADBackend):
         code_file.write_text(code, encoding="utf-8")
         return await self._dispatch("execute-lisp", {
             "code_file": str(code_file).replace("\\", "/")
-        })
+        }, expected_doc=expected_doc)
 
     async def assert_doc(self, expected_name: str) -> CommandResult:
         """Verify the active drawing matches expected_name before a batch.

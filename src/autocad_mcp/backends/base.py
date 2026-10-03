@@ -101,7 +101,7 @@ class AutoCADBackend(ABC):
 
     # --- Freehand LISP execution ---
 
-    async def execute_lisp(self, code: str) -> CommandResult:
+    async def execute_lisp(self, code: str, expected_doc: str | None = None) -> CommandResult:
         return CommandResult(ok=False, error="Not supported on this backend")
 
     async def assert_doc(self, expected_name: str) -> CommandResult:
