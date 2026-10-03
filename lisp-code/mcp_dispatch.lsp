@@ -1583,7 +1583,7 @@
     (progn
       (command "_.-PLOT" "_Y" "" "DWG To PDF.pc3"
         "" "" "" "" "" "" "" "" "" "" "" ""
-        path "_N")
+        path "_N" "")
       (cons T (strcat "{\"path\":\"" (mcp-escape-string path) "\"}")))
     (cons nil "Plot path required")
   )
