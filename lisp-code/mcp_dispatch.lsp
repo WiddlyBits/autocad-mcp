@@ -1582,8 +1582,8 @@
   (if path
     (progn
       (command "_.-PLOT" "_Y" "" "DWG To PDF.pc3"
-        "ANSI_A_(8.50_x_11.00_Inches)" "_Inches" "_Landscape"
-        "_N" "_Extents" "_Fit" "_Y" "acad.ctb" "_Y" "_N" "_Y" path "_Y")
+        "" "" "" "" "" "" "" "" "" "" "" ""
+        path "_N")
       (cons T (strcat "{\"path\":\"" (mcp-escape-string path) "\"}")))
     (cons nil "Plot path required")
   )
