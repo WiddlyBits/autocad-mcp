@@ -1577,13 +1577,16 @@
   )
 )
 
-(defun mcp-cmd-drawing-plot-pdf (params / path)
+(defun mcp-cmd-drawing-plot-pdf (params / path prev-filedia)
   (setq path (mcp-json-get-string params "path"))
   (if path
     (progn
+      (setq prev-filedia (getvar "FILEDIA"))
+      (setvar "FILEDIA" 0)
       (command "_.-PLOT" "_Y" "" "DWG To PDF.pc3"
-        "" "" "" "" "" "" "" "" "" "" "" ""
-        path "_N" "")
+        "" "" "" "" "" "" "" "" "" "" "" "" ""
+        path "" "")
+      (setvar "FILEDIA" prev-filedia)
       (cons T (strcat "{\"path\":\"" (mcp-escape-string path) "\"}")))
     (cons nil "Plot path required")
   )
