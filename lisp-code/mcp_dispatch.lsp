@@ -1577,16 +1577,34 @@
   )
 )
 
-(defun mcp-cmd-drawing-plot-pdf (params / path prev-filedia)
+(defun mcp-cmd-drawing-plot-pdf (params / path prev-filedia vp-la orig-plot lmin lmax pt1 pt2)
   (setq path (mcp-json-get-string params "path"))
   (if path
     (progn
+      ; Suppress viewport frame in the PDF: toggle its layer's plot flag (group
+      ; code 290: 1=plot, 0=no-plot) and restore it unconditionally after.
+      (setq vp-la nil orig-plot 1)
+      (setq vp-ss (ssget "X" '((0 . "VIEWPORT") (-4 . "<NOT") (69 . 1) (-4 . "NOT>"))))
+      (if vp-ss
+        (progn
+          (setq vp-la (tblobjname "LAYER"
+                        (cdr (assoc 8 (entget (ssname vp-ss 0))))))
+          (setq orig-plot (cdr (assoc 290 (entget vp-la))))
+          (entmod (subst (cons 290 0) (assoc 290 (entget vp-la)) (entget vp-la)))))
+      ; Use LIMMIN/LIMMAX as the Window corners so we plot exactly the paper
+      ; zone regardless of which output paper size is configured.
+      (setq lmin (getvar "LIMMIN"))
+      (setq lmax (getvar "LIMMAX"))
+      (setq pt1 (strcat (rtos (car lmin) 2 6) "," (rtos (cadr lmin) 2 6)))
+      (setq pt2 (strcat (rtos (car lmax) 2 6) "," (rtos (cadr lmax) 2 6)))
       (setq prev-filedia (getvar "FILEDIA"))
       (setvar "FILEDIA" 0)
       (command "_.-PLOT" "_Y" "" "DWG To PDF.pc3"
-        "" "" "" "" "" "" "" "" "" "" "" "" ""
+        "ARCH D (36.00 x 24.00 Inches)" "" "_Landscape" "" "_Window" pt1 pt2 "_Fit" "_Center" "" "" "" "" "" ""
         path "" "")
       (setvar "FILEDIA" prev-filedia)
+      (if vp-la
+        (entmod (subst (cons 290 orig-plot) (assoc 290 (entget vp-la)) (entget vp-la))))
       (cons T (strcat "{\"path\":\"" (mcp-escape-string path) "\"}")))
     (cons nil "Plot path required")
   )
