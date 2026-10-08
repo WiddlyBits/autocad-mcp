@@ -132,7 +132,8 @@ Write it to `C:/temp/fix_title_mtext.lsp` (>400 bytes):
 Expected result: `("ok" 0.08 1.907 <auto-value>)` where auto-value ≥ 0.24.
 The old handle is gone — re-locate via ssget (see Rule 1) for any subsequent edits.
 
-To revert: `drawing(undo)` once (reverses entdel + entmakex as one group).
+To revert: `drawing(undo)` once (reverses entdel + entmakex as one group — verified on a
+layout tab, LT 2027, 2026-10-08: seed restored, copy gone).
 
 
 ## Rule 4: standard char heights by line count
