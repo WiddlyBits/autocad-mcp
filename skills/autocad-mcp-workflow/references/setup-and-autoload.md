@@ -26,12 +26,6 @@ hand-rolled AutoLISP and nothing says so. That is the most likely explanation fo
 called all day. Run `init` at the start of a session, and check the `preflight` block it
 returns.
 
-**In a fresh session, `system(status)` will show `select: false` and `reactor_fn: false`
-even when `mcp_dispatch.lsp` loaded correctly.** This is expected — `mcp_probes.lsp` and
-`mcp_select.lsp` are not auto-loaded; only the dispatcher is. Call
-`system(operation="init")` before any selection- or reactor-dependent work. The first
-`status` call confirming `select: true` is the green light. Field-confirmed 2026-09-18.
-
 This persists in the registry
 (`HKCU:\SOFTWARE\Autodesk\AutoCAD LT\R33\ACADLT-A101:409\Profiles\<<Unnamed Profile>>\Dialogs\Appload\Startup`
 as `NumStartup`/`1Startup`), so it survives restarts. Reading those registry values is
@@ -77,33 +71,12 @@ execute_lisp "(mcp:grid-map-in 24 16 \"Model\")"
 ```
 
 If that errors on the name, the running AutoCAD has the old file. Fix: `system(operation="init")`
-reloads `mcp_probes.lsp` and `mcp_select.lsp`; `mcp_dispatch.lsp` needs a restart (then `init`
+reloads `mcp_probes.lsp` and `mcp_select.lsp`; `mcp_dispatch.lsp` needs APPLOAD or a restart (then `init`
 per the section above). Don't proceed against stale definitions; a validation run against the
 code you were trying to replace is worse than no validation run.
 
-## Registering/re-registering the MCP server itself in PowerShell
+## Registering the MCP server
 
-If you ever need to run `claude mcp add`/`remove` for autocad-mcp (or anything else)
-from PowerShell on this machine, the plain `claude` command mis-parses arguments that
-come after the `--` separator. Confirmed failures:
-
-```
-claude mcp add autocad-mcp -e AUTOCAD_MCP_BACKEND=auto -- "...\python.exe" -m autocad_mcp
-# error: unknown option '-m'
-
-claude mcp add --% autocad-mcp -e AUTOCAD_MCP_BACKEND=auto -- "...\python.exe" -m autocad_mcp
-# error: unknown option '--%'
-```
-
-The fix is to resolve and invoke the real `claude.exe` binary directly instead of the
-bare `claude` command:
-
-```powershell
-$claudeExe = "C:\Users\Gianni\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe"
-& $claudeExe mcp add autocad-mcp -s user -e AUTOCAD_MCP_BACKEND=auto -- "C:\Users\Gianni\autocad-mcp\.venv\Scripts\python.exe" -m autocad_mcp
-```
-
-Use `-s user` scope so the server is available across all projects, not just
-whichever directory it was registered from. Verify with
-`& $claudeExe mcp list` / `& $claudeExe mcp get autocad-mcp` — a healthy registration
-shows `√ Connected`.
+`claude mcp add` in PowerShell: call `claude.exe` by full path, not bare `claude` — see the
+global CLAUDE.md. Use `-s user` scope and `-e AUTOCAD_MCP_BACKEND=auto`, with
+`C:\Users\Gianni\autocad-mcp\.venv\Scripts\python.exe -m autocad_mcp` after `--`.

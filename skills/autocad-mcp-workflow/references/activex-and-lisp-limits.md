@@ -26,12 +26,7 @@ click into the drawing area and press Esc a few times, then re-verify state with
 `drawing(info)` before retrying anything — a blind retry could double-apply whatever
 the hung call was doing.
 
-## Batch a sequence of edits into one script file instead of many execute_lisp calls
-
-Each `execute_lisp` round-trip has its own MCP tool-call overhead. When a task needs
-several sequential command-line operations (move a batch of entities, run the same
-edit across many layers, a multi-step cleanup), write them as an AutoCAD script file
-and run it in one dispatch instead of one `execute_lisp` per step:
+## Batching to one `.scr` (Rule 4)
 
 ```lisp
 (setq f (open "C:/temp/batch.scr" "w"))
@@ -42,11 +37,8 @@ and run it in one dispatch instead of one `execute_lisp` per step:
 (command "_.SCRIPT" "C:/temp/batch.scr")
 ```
 
-This is also the standard LT workaround for automation that would otherwise need
-ActiveX object-creation (which hangs — see above): drive it through `(command ...)`
-lines in a script instead of `vla-Add`. Still verify afterward with `drawing(info)` —
-a script that errors partway through can leave the drawing in a partially-applied
-state, same as any other batch operation.
+It is also the LT workaround for ActiveX object creation. A script that errors partway leaves
+the drawing partly applied, so verify with `drawing(info)` afterwards.
 
 ## Four ways a single call gets thrown away
 

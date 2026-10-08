@@ -4,39 +4,25 @@ description: >-
   Place, resize, or reflow text inside the ECSI title block on SMID panel drawings.
   Load before touching any TITLE-layer MTEXT: when fitting a title, updating a
   revision number, or diagnosing text that appears outside the title block border.
----
 
 # Title block text — placing and fitting
 
-## When to load this skill
+Do **not** probe the ECSI title block geometry — it is constant across all drawings in this
+project and listed in Rule 2.
 
-Any time you are:
-- Editing text in the title block (title, job, customer, revision, drawing no., date)
-- Diagnosing text that appears outside the title block border
-- Setting MTEXT char height to fit multiple lines in a cell
+## Rule 0: preflight and guard per the workflow skill
 
-Do **not** open the ECSI title block geometry from a probe call — it is constant across
-all drawings in this project and is listed below.
-
----
-
-## Rule 0: one preflight, then guard every edit
-
-`system(operation="init")` before any `execute_lisp`. Every LISP snippet that mutates the
-drawing must open with `mcp:guard`. The guard does a **right-suffix match** on `DWGNAME`
-(the full filename including `.dwg` extension).
+`init` and `mcp:guard` work exactly as in `autocad-mcp-workflow` Rules 0 and 2. The only
+title-block specific is the suffix: the guard matches the right end of `DWGNAME`, including
+`.dwg` and any `_recover`.
 
 | Drawing | Guard suffix to pass |
 |---|---|
 | `SMID Well 8 AI-01 Draft 1.dwg` | `"AI-01 Draft 1.dwg"` |
 | `SMID Well 8 AI-01 Draft 1_recover.dwg` | `"AI-01 Draft 1_recover.dwg"` |
-| `SMID Treatment Area DI-02 Draft 1.dwg` | `"DI-02 Draft 1.dwg"` |
 
-General pattern: `"<drawing-id> Draft <n>[_recover].dwg"` — include `_recover` when the
-preflight `dwg` field ends in `_recover.dwg`. A WRONG-DOC response returns `actual_dwg` —
-copy its right portion to form the correct suffix.
+A `WRONG-DOC` response returns `actual_dwg` — copy its right portion to form the suffix.
 
----
 
 ## Rule 1: find content entities by position, not by handle
 
@@ -56,7 +42,6 @@ Adjust the corner coords to match the target cell from the table in Rule 2. If H
 already run (`mcp:sel` holds the entity), use `(handent (car (mcp:sel)))` directly —
 faster and equally reliable within a session, just not across sessions.
 
----
 
 ## Rule 2: title block cell geometry (hardcoded — do not re-probe)
 
@@ -93,7 +78,6 @@ Cell width: **1.09** (x: 15.494 to 16.584). These MTEXTs typically hold short st
 (e.g. "AI-01", "DRAFT 1") at h=0.100 on a single line — no fitting calculation needed
 unless the revision string grows long.
 
----
 
 ## Rule 3: diagnosing and fixing the multi-column overflow
 
@@ -101,35 +85,23 @@ unless the revision string grows long.
 One or more lines of the title text appear **outside the title block border** to the
 right (typically at x ≈ 17.7). The title cell itself looks partially or fully empty.
 
-### Root cause
-MTEXT stores a defined height (DXF group 43). When the text needs more vertical space
-than group 43 allows, lines overflow into a phantom second column whose left edge is
-at `insertion.x + group41 + gutter`. This happens even with groups 75/76 nil (no explicit
-column extension) because AutoCAD uses the defined height as a column height.
+MTEXT stores a defined height (group 43). When the text needs more vertical space than
+that, lines overflow into a phantom second column at `insertion.x + group41 + gutter` — even
+with groups 75/76 nil. **Trigger: `n_lines × char_height > group43`.** At h=0.100 with the
+template's group 43=0.272, 2 lines fit and line 3 escapes.
 
-**The trigger:** `n_lines × char_height > group43`
-
-At h=0.100 with group 43=0.272 (the template default): 2 lines fit (2×0.100=0.200),
-3 lines do not (3×0.100=0.300 > 0.272). Line 3 escapes to the phantom column.
-
-### Why entmod alone cannot fix this
-
-AutoCAD LT maintains a locked ratio `group43 / group40 = constant`. When you change
-group 40 (char height) via `entmod`, AutoCAD silently recalculates group 43 proportionally.
-When you then try to set group 43 directly via `entmod`, AutoCAD silently ignores it and
-it snaps back to `old_group43 × (new_h / old_h)`. Verified 2026-09-09 on AI-01: the ratio
-was 2.72 — meaning 3 lines (ratio 3.0) will overflow at any char height via this path.
-
-**Do not attempt Option B (increase group 43 via entmod) — it will not take.**
+**`entmod` cannot fix group 43.** LT locks `group43 / group40`: changing 40 rescales 43, and
+setting 43 directly snaps back (verified 2026-09-09 on AI-01, ratio 2.72 — so 3 lines overflow
+at any height via entmod).
 
 ### Fix: reduce char height and rebuild with entmakex
 
 Reduce char height so `n_lines × h` comfortably fits. For the Title cell (n=3):
 use **h = 0.08** (3 × 0.08 = 0.24 ≤ cell height 0.247 ✓).
 
-Because `entmod` for group 43 is silently refused, **rebuild the entity via `entmakex`**.
-AutoCAD will auto-set group 43 based on the new rendered text height — which will be ≥ n×h
-so no phantom column forms. Write this to `C:/temp/fix_title_mtext.lsp` (it is >400 bytes):
+Then **rebuild via `entmakex`**, which auto-sets group 43 from the rendered height. The
+title block is paper space, so run it with `11x17` current and **no** `mcp:in-model-space`.
+Write it to `C:/temp/fix_title_mtext.lsp` (>400 bytes):
 
 ```lisp
 ; Run as: (load "C:/temp/fix_title_mtext.lsp")
@@ -162,7 +134,6 @@ The old handle is gone — re-locate via ssget (see Rule 1) for any subsequent e
 
 To revert: `drawing(undo)` once (reverses entdel + entmakex as one group).
 
----
 
 ## Rule 4: standard char heights by line count
 
@@ -179,7 +150,6 @@ pre-computed for the two constrained cells (height ≈ 0.247):
 For the taller cells (Customer, Job, Drawing No., Date — height ≈ 0.333): the template
 default h=0.100 fits up to 3 lines without adjustment.
 
----
 
 ## Rule 5: verify without a full screenshot
 
@@ -187,12 +157,10 @@ After the entmakex, climb the ladder before reaching for pixels:
 
 1. `entity(get)` on the handle — confirms the new group 40 value was written
 2. **Read every title-block string at once with no LISP:** `drawing(save_as_dxf)`, then
-   `uv run python -m autocad_mcp.probe_dxf out.dxf --text --space <tab> --layer TITLE`
-   (from `~/autocad-mcp`). That gives handle, insert, height, and for MTEXT the wrap width
-   and attach point, all at ~0 context. Use it instead of `mcp:text-dump-in`, which has no
-   handle or width. In DO Draft 2 this read-back took 22 calls and two hand-LISP errors.
-3. `(mcp:sel-show)` — zooms to the entity; if the bbox no longer extends to x≈17.7 the
-   overflow is gone
+   `probe_dxf --text --space <tab> --layer TITLE` (workflow skill, L3b) — handle, insert,
+   height, MTEXT wrap width and attach point at ~0 context. `mcp:text-dump-in` has no handle
+   or width. In DO Draft 2 this read-back took 22 calls by hand.
+3. `(mcp:sel-show)` — if the bbox no longer extends to x≈17.7 the overflow is gone
 4. **Fit check from the plot, not a screenshot.** After `drawing(plot_pdf)`, open the PDF with
    pymupdf and compare `page.get_text("words")` boxes against the cell rectangle. Work out
    the scale from the PDF instead of assuming one. `plot_pdf` plots the LIMMIN–LIMMAX
@@ -201,32 +169,18 @@ After the entmakex, climb the ladder before reaching for pixels:
    A drawing point then maps to `(ox + (x − LIMMIN.x)·s, ph − oy − (y − LIMMIN.y)·s)`,
    because the PDF's y axis points down. Any word box outside the mapped cell is an overflow.
    This costs no images, and the PDF is the deliverable anyway.
-5. Only if you need visual confirmation of layout: `view(get_screenshot, region=[l,t,r,b])`
-   cropped to the title block area (roughly screen pixels for x=[title-block-left, border-right],
-   y=[title-block-top, bottom]) — saves ~1000 tokens vs a full window capture
-
----
+5. Only for a visual read: `view(get_screenshot, region=[l,t,r,b])` cropped to the title block.
 
 ## Rule 6: fixing bottom overflow after the entmakex rebuild
 
-After the entmakex fix, the phantom column is gone but the text block may still
-**leak below the cell bottom border**. This is a separate problem from the right-side
-overflow: the MTEXT insertion sits below the cell top, leaving less vertical room than the
-cell height implies.
-
-**Title cell geometry (from Rule 2):**
-- Insertion y = −0.2113 (TC anchor)
-- Cell bottom y = −0.4386
-- Available from insertion to bottom: **0.227 units**
-
-At h=0.08 with default line spacing (group 73=1 "at least", group 44=1.0), 3 lines render
-≈ 0.346 tall — leaking ~0.12 units below the cell. AutoCAD auto-sets group 43 ≈ 0.351 to
-match, which confirms the overflow is ~0.12 units.
+After the rebuild the phantom column is gone, but the block may **leak below the cell**: the
+TC insertion (y −0.2113) leaves only **0.227** to the cell bottom (−0.4386). At h=0.08 with
+default spacing (group 73=1, 44=1.0), 3 lines render ≈0.346 tall and group 43 auto-sets ≈0.351.
 
 ### Fix: tighten line spacing via entmod (this DOES work, unlike group 43)
 
-Groups 73 and 44 are not proportionally locked and respond correctly to `entmod`. Get the
-new handle via ssget (Rule 1) — the entmakex created a new entity, old handle is gone.
+Groups 73 and 44 are not locked and `entmod` works. The rebuild made a new entity — find it
+via Rule 1.
 
 ```lisp
 (if (not (mcp:guard "<SUFFIX>" "11x17"))
@@ -247,10 +201,8 @@ new handle via ssget (Rule 1) — the entmakex created a new entity, old handle 
           (cdr (assoc 43 (entget ent))))))
 ```
 
-Verified 2026-09-09 on AI-01: group 73=2, group 44=0.80 reduced group 43 from 0.351 to
-0.320, bringing "AI 16XI HF" inside the cell bottom. If more tightening is needed, reduce
-group 44 further (0.75 is the next reasonable step). Do not go below ~0.65 — the lines
-will look cramped against each other.
+Verified 2026-09-09 on AI-01: 73=2, 44=0.80 took group 43 from 0.351 to 0.320. Step down to
+0.75, then 0.70; below ~0.65 the lines look cramped.
 
 | group 44 | group 43 result | Fits in 0.227? |
 |---|---|---|
@@ -259,7 +211,6 @@ will look cramped against each other.
 | 0.70 | ≈ 0.28 | Yes |
 | 0.65 | ≈ 0.26 | Yes — tightest comfortable spacing |
 
----
 
 ## Quick reference: group codes for MTEXT editing
 
@@ -272,6 +223,4 @@ will look cramped against each other.
 | 73 | Line spacing type (1=at least, 2=exact) | 1 | Yes |
 | 44 | Line spacing factor | 1.0 | Yes |
 
-Read them: `(setq d (entget ent))` then `(assoc <group> d)`.  
-Write them: `(setq d (subst (cons <group> <value>) (assoc <group> d) d))` then `(entmod d)`.  
-**Exception:** group 43 requires `entmakex` (see Rule 3).
+**Group 43 requires `entmakex`** (Rule 3); everything else here takes `entmod`.

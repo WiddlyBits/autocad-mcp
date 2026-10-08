@@ -11,11 +11,9 @@ description: >-
 
 # Working in AutoCAD LT via autocad-mcp
 
-**Every `execute_lisp` is one API request that re-reads the whole current context** (60–114 K
-cache-read measured across the four DO Draft 2 sessions). That is
-the cost that dominates this workflow — not screenshots. Round-trip count is the lever;
-each rule below exists to remove round trips or to remove the mistakes that cause them.
-(For the measurements behind that, see `references/why-this-skill-exists.md`.)
+**Every `execute_lisp` is one API request that re-reads the whole current context.** Round-trip
+count is the cost that dominates this workflow, not screenshots. Each rule below exists to remove
+round trips or the mistakes that cause them. Evidence: `references/why-this-skill-exists.md`.
 
 ## Rule 0: one preflight call, before anything else
 
@@ -29,11 +27,14 @@ pickfirst                 — whether grip selection is even enabled
 ```
 
 `system(operation="status")` returns the same block without re-loading. Run `init` at the
-start of a session and after any AutoCAD restart or `.lsp` edit; it re-loads every time on
-purpose, which is also the fix for edited-on-disk files whose old definitions stay
-resident and answer plausibly. If `probes` or `select` comes back false, say so and stop —
-the rungs below are not available and hand-rolled AutoLISP is what you are about to spend
-the session on.
+start of a session, after any AutoCAD restart or `.lsp` edit, and on the first visit to each
+document — it loads into the current document only, and re-loading is also the fix for stale
+definitions that answer plausibly.
+
+**Stop unless `system(status)` says `backend: "file_ipc"`.** `auto` can lose a startup race
+and pick ezdxf, which answers `ok:true` against an empty in-memory drawing while AutoCAD sits
+open. If `probes` or `select` comes back false, say so and stop too — without them the session
+is hand-rolled AutoLISP.
 
 ## Rule 1: the selection contract
 
@@ -48,16 +49,15 @@ never ask him to re-select in the hope that this time it survives.
    previous-selection set. Never make him ask which command you meant.
 2. **`(mcp:sel-dump)` — once.** One payload gives count, source, document, space, the
    union bbox, and per entity: handle, type, layer, space, and type-correct geometry
-   including the literal contents of any text. It answers everything; do not follow it
-   with a second probe of the same set.
+   including the literal contents of any text. Do not follow it with a second probe of the
+   same set.
 3. **Echo before you mutate.** `(mcp:sel-show)` zooms to the set and highlights it, at
    zero token cost. Say what you counted ("16 TEXT on layer LABEL, model space").
-   **If the `count` in the dump does not match what the user described, halt.** Do not
-   edit. Report the discrepancy and ask the user to re-select or explain the gap — a set
-   that is wrong before the edit is wrong after it.
+   **If the `count` does not match what the user described, halt** and ask — a set that is
+   wrong before the edit is wrong after it.
 4. **Operate by handle list.** Handles survive an intervening command, the dispatch
    boundary, and the ~128 open-selection-set ceiling. `(ssget "_P")` survives none of
-   those — it is whatever command ran last, which is not necessarily what he meant.
+   those.
 
 The verbs each take `(handles dwg tab ...)` and report what they changed:
 
@@ -68,17 +68,18 @@ The verbs each take `(handles dwg tab ...)` and report what they changed:
 (mcp:text-sub     (mcp:sel) "DI-03" "Model" "Bank 1" "Bank 3")
 ```
 
-Anything they do not cover is still hand-written AutoLISP — but read the dump first and
-write the pattern against strings you have actually read. A `wcmatch` pattern written from
-memory matched 0 of 152 labels and cost three round trips to correct.
+Anything they do not cover is hand-written AutoLISP — but read the dump first and write
+patterns against strings you have actually read. A `wcmatch` pattern written from memory
+matched 0 of 152 labels.
 
 ## Rule 2: name the document and the space on every edit
 
-`mcp:guard` is not a courtesy — it is what makes the wrong-document edit impossible rather
-than merely checked-for. Pass the document suffix (`"DI-02"`) and the tab (`"Model"`, or a
-layout name) and the verb refuses with `WRONG-DOC` instead of editing, naming what it
-found. **Every LISP snippet that mutates the drawing — whether a named verb or hand-written
-AutoLISP — must begin with the guard:**
+**autocad-mcp routes to whatever window holds UI focus**, not the one you meant, and
+`vla-Add`/`vla-Open` do not reliably move focus even when `vla-get-ActiveDocument` says they
+did. `mcp:guard` makes the wrong-document edit impossible rather than merely checked-for: pass
+the document suffix (`"DI-02"`) and the tab (`"Model"` or a layout name) and the verb refuses
+with `WRONG-DOC` instead of editing. **Every LISP snippet that mutates the drawing — named
+verb or hand-written — must begin with the guard:**
 
 ```lisp
 (if (not (mcp:guard "DI-02" "Model"))
@@ -88,9 +89,8 @@ AutoLISP — must begin with the guard:**
   ))
 ```
 
-where the string literals match the active target (`dwg` suffix and tab name). Do not fold
-a guard-free snippet into the session and assume the named verbs cover it. When the user
-genuinely must click a tab, give the whole sequence up front rather than one round trip per tab.
+When the user genuinely must click a tab, give the whole sequence up front rather than one
+round trip per tab.
 
 Space is not a detail, and it bites edits as hard as probes:
 
@@ -102,7 +102,8 @@ Space is not a detail, and it bites edits as hard as probes:
 | `entmake`, `entmakex` | `CTAB` | 8 MTEXT rebuilt from model-space originals landed in paper space |
 
 Filter `ssget "_X"` with `(cons 410 "Model")` — or `(67 . 0)` model / `(67 . 1)` paper — or
-call `(mcp:space-ss "Model")`. Start from `(getvar "CTAB")` if you don't know what's live.
+call `(mcp:space-ss "Model")`. **On a layout tab, always use the `-in` form**
+(`(mcp:grid-map-in 24 16 "Layout1")`); the bare form silently scans model space.
 
 **`entmakex` follows `CTAB`, not the space of the entity you copied.** Wrap it in
 `(mcp:in-model-space (lambda () (entmakex d)))` only when the target is model space — a
@@ -110,23 +111,13 @@ paper-space rebuild (the title block) must stay on its tab. **Verify with group 
 the result, not with text, width and entity count** — all three read clean on an entity that
 is in the wrong space. See `references/activex-and-lisp-limits.md`.
 
-**Whenever the target is a layout tab or paper space, use the `-in` form explicitly:**
-`(mcp:bbox-by-layer-in "Layout1")`, `(mcp:grid-map-in 24 16 "Layout1")`,
-`(mcp:text-dump-in "Layout1")`. The bare form silently scans model space and returns
-plausible-looking wrong answers on a composed sheet.
-
-**To back out an edit, use `drawing(undo)`** — every verb here opens one named UNDO group,
-so one undo reverses the whole batch exactly. Never reverse a move by moving back: a
-re-move with a slightly different offset leaves a drawing that is not the one you started
-with.
-
-`vla-Add`/`vla-Open` do not reliably transfer real UI focus even when
-`vla-get-ActiveDocument` says they did.
+**To back out an edit, use `drawing(undo)`** — every verb opens one named UNDO group
+(`mcp:undo-begin`/`mcp:undo-end`; use them in hand-written edits too), so one undo reverses
+the whole batch. Never reverse a move by moving back: a re-move with a slightly different
+offset leaves a drawing that is not the one you started with.
 
 **Load the `autocad-save-verification` skill before any save, SAVEAS, `plot_pdf`, DXF export,
-or new drawing from a `.dwt`.** Those writes can report ok and still not land, and that
-skill is the procedure for checking them. In DO Draft 2 it never loaded, and the
-template SAVEAS was worked out by hand instead.
+or new drawing from a `.dwt`.** Those writes can report ok and still not land.
 
 ## Rule 3: climb the capture ladder
 
@@ -136,8 +127,8 @@ genuinely cannot answer.
 
 | Rung | Call | Answers | Cost |
 |---|---|---|---|
-| L0 | `system(status)` preflight | which document, space, libraries | ~80 tok |
-| L0 | `(mcp:whoami)` | which file, which tab, unsaved changes — **the** identity probe (not `mcp:sys-snapshot`) | ~80 tok |
+| L0 | `system(status)` preflight | which backend, document, space, libraries | ~80 tok |
+| L0 | `(mcp:whoami)` | which file, folder, tab, unsaved changes — **the** identity probe | ~80 tok |
 | L0 | `drawing(info)`, `entity(count)` | did the edit apply | ~50 tok |
 | L1 | `(mcp:sel-dump)`, `entity(get)` | what is selected; where is it; what does it say | ~100–400 tok |
 | L2 | `(mcp:bbox-by-layer-in "Model")` | what occupies which region | ~200–600 tok |
@@ -149,9 +140,8 @@ genuinely cannot answer.
 `entity(get)` returns real geometry and the contents of TEXT/MTEXT/ATTDEF, so **never
 screenshot to read a label**. Angles come back in degrees.
 
-**L3b is the rung to reach for when the question is "what is actually in this drawing".**
-`drawing(save_as_dxf)` writes the file, and parsing happens on this machine, so only the
-answer enters the conversation:
+**L3b is the rung for "what is actually in this drawing".** Parsing happens on this machine,
+so only the answer enters the conversation. Run from `~/autocad-mcp` under `uv run`:
 
 ```
 python -m autocad_mcp.probe_dxf out.dxf                 # the grid snapshot
@@ -161,63 +151,47 @@ python -m autocad_mcp.probe_dxf out.dxf --text --space Layout1 --layer TITLE
                                     # title-block read-back: handle, height, MTEXT width + attach
 ```
 
-Run it from `~/autocad-mcp` under `uv run`. `--space` reads a layout instead of model space,
-and an unknown name lists the real ones rather than costing a second run.
+`--text` reads model space unless `--space` names a layout; an unknown name lists the real ones.
 
 **Screenshot parameters, in order of effect.** `region=[left,top,right,bottom]` crops
 *before* the downscale, so a 500x400 detail crop is ~270 tokens and *sharper* than the
-whole window at 1280. **Default for any detail check: always pass `region=[l,t,r,b]`.**
-Only omit `region` when the question genuinely requires the full window (layout read,
-match-to-reference-photo). `save_to="….png"` writes to disk and attaches nothing, costing
-no context. `max_dimension` (default 1280, clamped 64–2576); halving it roughly quarters
-the cost. Every capture reports `est_tokens`. Two non-levers: `quality` (JPEG) shrinks
+whole window — **always pass it for a detail check.** `save_to="….png"` writes to disk and
+attaches nothing. `max_dimension` (default 1280, clamped 64–2576); halving it roughly
+quarters the cost. Every capture reports `est_tokens`. Non-levers: `quality` (JPEG) shrinks
 bytes, not tokens, and nothing above 2576 px survives the vision API's own downscale.
 
-Reserve a full-window capture for what only pixels answer — does the layout read
-correctly, is there unwanted overlap, does it match a reference photo. Batch to a
-checkpoint after a group of edits, not after each one.
+Reserve a full-window capture for what only pixels answer — layout, overlap, match to a
+reference photo — and batch it to a checkpoint after a group of edits, not after each one.
 
-`view(zoom_window)` takes **drawing coordinates, not screen pixels**. Guessing pixel-like
-values doesn't move the view, and the only way to notice is another screenshot — so it
-silently doubles image cost. `(mcp:sel-show)` zooms to a real bounding box instead; prefer
-it, or compute the window from entity coordinates.
+`view(zoom_window)` takes **drawing coordinates, not screen pixels**; pixel-like guesses
+don't move the view and cost another screenshot to notice. Prefer `(mcp:sel-show)`, or
+compute the window from entity coordinates.
 
 ## Rule 4: batch, and stop at phase boundaries
 
 Several sequential command-line operations belong in **one** `.scr` run via
-`(command "_.SCRIPT" "C:/temp/batch.scr")`, not one `execute_lisp` each. Each round trip
-costs about the current context size, so this is the difference between one request and fifteen. See
-`references/activex-and-lisp-limits.md`.
+`(command "_.SCRIPT" "C:/temp/batch.scr")`, not one `execute_lisp` each — one request
+instead of fifteen. Snippet in `references/activex-and-lisp-limits.md`. Any `execute_lisp`
+body longer than ~400 bytes, or with quotes nested beyond 2 levels, goes in a temp `.lsp`
+and runs as `(load "path")`; inlined, it breaks the JSON envelope.
 
 When a phase is confirmed complete (cleanup → template → layout → detailing), suggest the
-next one start as a fresh chat with a short written handoff. A long thread that compacts
-itself repeatedly is more expensive and lossier than a clean handoff.
+next one start as a fresh chat with a short written handoff.
 
 ## When something is wrong
 
-| Symptom | Required Action |
-|---|---|
-| `preflight` `select: false` or `probes: false` | `system(operation="init")` |
-| `(mcp:sel)` returns nil / empty | Ask for `HS` + Enter handoff. Do NOT attempt re-selection — it never survives the dispatch boundary. |
-| `WRONG-DOC` refusal | Update target to `actual_dwg` / `actual_tab` from the payload. No re-probe. |
-| `UNRESOLVED-REF` | Verify the reference entity's coordinates in the `(mcp:sel-dump)` payload before retrying align. |
-| Probe payload `truncated: true` (`truncated_reason: "max_entities"` or `"time"`) | Narrow the scan: switch to the `-in` form, add a layer filter, or split the region. |
-| Dispatch timeout / "Screenshot capture failed" | `system(operation="init")` re-acquires the window handle. |
-| `execute_lisp` hangs (ActiveX) | Follow `references/activex-and-lisp-limits.md` recovery steps. Do not retry blindly — a blind retry can double-apply. |
-| `drawing(operation="save_as")` → "Unknown drawing operation" | Use `drawing(operation="save", data={"path": …})` instead. |
-
-Purge / `CLAYER` oddities, stale definitions, `claude mcp add` in PowerShell — see
-`references/troubleshooting.md`.
+`references/troubleshooting.md` maps every symptom and error payload (`WRONG-DOC`,
+`UNRESOLVED-REF`, `truncated`, the `timeout_*` codes) to the action. **Never re-send a
+mutating call blindly** — check state first; a blind retry can double-apply.
 
 ## References
 
 - `autocad-save-verification` (sibling skill) — which save verb to reach for, how each one
   fails silently, and what counts as proof that a write landed
-- `references/tool-reference.md` — the full tool surface, `mcp_select.lsp`'s API, and
-  selection techniques for 20–30 K entity drawings
+- `references/troubleshooting.md` — symptoms, error payloads, retry rules
+- `references/tool-reference.md` — what the tool schemas don't say, `mcp_select.lsp`'s API,
+  and selection techniques for 20–30 K entity drawings
 - `references/activex-and-lisp-limits.md` — LT's ActiveX limits, hang recovery, `.scr`
-  batching, four ways a raw AutoLISP call gets thrown away, and the traps in rebuilding an
-  entity (wrong space, silent revert, `entdel` as the undo)
-- `references/setup-and-autoload.md` — APPLOAD, restarts, MCP registration
-- `references/troubleshooting.md` — symptom table
-- `references/why-this-skill-exists.md` — the measurements behind every rule above
+  batching, raw-AutoLISP traps, and rebuilding an entity safely
+- `references/setup-and-autoload.md` — Startup Suite, restarts, stale definitions
+- `references/why-this-skill-exists.md` — the measurements behind the rules
