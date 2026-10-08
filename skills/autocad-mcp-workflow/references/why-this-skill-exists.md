@@ -7,7 +7,7 @@ enough to actually be followed.
 All figures from `tests/token_audit.py` in `~/autocad-mcp`, which is offline and free:
 
 ```bash
-uv run python -m tests.token_audit ~/.claude/projects/C--Users-Gianni-autocad-mcp/<session>.jsonl
+uv run python -m tests.token_audit ~/.claude/projects/C--Users-Gianni/<session>.jsonl
 ```
 
 ## 2026-08-11 — the session that started it

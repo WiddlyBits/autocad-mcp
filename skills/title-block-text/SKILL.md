@@ -145,15 +145,15 @@ so no phantom column forms. Write this to `C:/temp/fix_title_mtext.lsp` (it is >
               (function (lambda (pair)
                 (member (car pair) (list -1 -2 5 102 330 360))))
               d))
-    (command "_.UNDO" "_M")  ; one mark so one undo reverses delete+create
+    (mcp:undo-begin "title-fit")  ; one group, so one drawing(undo) reverses create+delete
     (setq newent (entmakex d))
+    (if newent (entdel ent))
+    (mcp:undo-end)
     (if newent
-      (progn
-        (entdel ent)
-        (list "ok"
-              (cdr (assoc 40 (entget newent)))
-              (cdr (assoc 41 (entget newent)))
-              (cdr (assoc 43 (entget newent)))))
+      (list "ok"
+            (cdr (assoc 40 (entget newent)))
+            (cdr (assoc 41 (entget newent)))
+            (cdr (assoc 43 (entget newent))))
       "entmakex-failed")))
 ```
 
@@ -183,7 +183,7 @@ default h=0.100 fits up to 3 lines without adjustment.
 
 ## Rule 5: verify without a full screenshot
 
-After the entmod, climb the ladder before reaching for pixels:
+After the entmakex, climb the ladder before reaching for pixels:
 
 1. `entity(get)` on the handle — confirms the new group 40 value was written
 2. **Read every title-block string at once with no LISP:** `drawing(save_as_dxf)`, then
@@ -232,7 +232,7 @@ new handle via ssget (Rule 1) — the entmakex created a new entity, old handle 
 (if (not (mcp:guard "<SUFFIX>" "11x17"))
   (mcp:wrong-doc "<SUFFIX>" "11x17")
   (progn
-    (setq ent <handle-from-ssget>)
+    (setq ent (handent "<handle>"))
     (setq d (entget ent))
     (if (assoc 44 d)
       (setq d (subst (cons 44 0.80) (assoc 44 d) d))

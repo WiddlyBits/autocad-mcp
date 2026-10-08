@@ -28,7 +28,7 @@ summary of the operations that exist, not a substitute for the schema.
   to disk and attaches **no image**, costing no context); `max_dimension` (default 1280,
   clamped 64-2576, `None` = full res); `quality` 1-95 switches to JPEG but does **not**
   reduce token cost. Every capture reports `width`, `height`, and `est_tokens`.
-  See Rule 1 in the main skill before calling this.
+  See Rule 3 in the main skill before calling this.
 - **block**, **annotation**, **pid** — less frequently used; check the live schema
   when a task needs them
 

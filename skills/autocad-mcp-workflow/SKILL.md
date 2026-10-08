@@ -104,10 +104,9 @@ Space is not a detail, and it bites edits as hard as probes:
 Filter `ssget "_X"` with `(cons 410 "Model")` — or `(67 . 0)` model / `(67 . 1)` paper — or
 call `(mcp:space-ss "Model")`. Start from `(getvar "CTAB")` if you don't know what's live.
 
-**Rebuilding an entity puts it in the current space, not the one it came from.** `entmakex`
-appends to whatever `CTAB` is live, so recreating a model-space entity while a layout tab is
-current silently lands it in paper space — same coordinates, same height, wrong space. Set
-`(setvar "CTAB" "Model")` first and restore the tab after. **Verify with group `67`/`410` on
+**`entmakex` follows `CTAB`, not the space of the entity you copied.** Wrap it in
+`(mcp:in-model-space (lambda () (entmakex d)))` only when the target is model space — a
+paper-space rebuild (the title block) must stay on its tab. **Verify with group `67`/`410` on
 the result, not with text, width and entity count** — all three read clean on an entity that
 is in the wrong space. See `references/activex-and-lisp-limits.md`.
 

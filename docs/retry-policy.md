@@ -1,8 +1,9 @@
 # Retry Policy
 
-This document states the fork's explicit retry policy for IPC errors. The rules here are **never
-auto-applied by the server** — the MCP server returns the error code and leaves retry decisions to
-the caller. This is intentional: the server cannot know whether a geometry-creating command
+This document states the fork's explicit retry policy for IPC errors. The server applies exactly
+one of these rules itself: it re-sends once on `timeout_not_dispatched`, because a command that
+never started cannot double-apply (`_dispatch_unlocked` in `file_ipc.py`). Every other retry
+decision is left to the caller, since the server cannot know whether a geometry-creating command
 committed a partial result before timing out.
 
 Cross-reference [docs/file-ipc-error-model.md](file-ipc-error-model.md) for full payload shapes

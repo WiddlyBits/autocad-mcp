@@ -76,9 +76,9 @@ plausible answer:
 execute_lisp "(mcp:grid-map-in 24 16 \"Model\")"
 ```
 
-If that errors on the name, the running AutoCAD has the old file. Fix: re-run `APPLOAD` on
-both .lsp files, or restart AutoCAD — and after a restart, `system(operation="init")` per
-the section above. Don't proceed against stale definitions; a validation run against the
+If that errors on the name, the running AutoCAD has the old file. Fix: `system(operation="init")`
+reloads `mcp_probes.lsp` and `mcp_select.lsp`; `mcp_dispatch.lsp` needs a restart (then `init`
+per the section above). Don't proceed against stale definitions; a validation run against the
 code you were trying to replace is worse than no validation run.
 
 ## Registering/re-registering the MCP server itself in PowerShell
