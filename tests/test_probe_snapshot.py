@@ -354,6 +354,38 @@ class TestCLI:
         assert {i["text"] for i in items} == {"TK-101", "P-101", "V-101"}
         assert all(i["layer"] and i["handle"] for i in items)
 
+    def _title_block(self, tmp_path):
+        """MTEXT on TITLE in Layout1, plus a decoy on another layer."""
+        doc = ezdxf.new()
+        doc.layers.add("TITLE")
+        layout = doc.layouts.get("Layout1")
+        mt = layout.add_mtext("DIGITAL OUTPUT\\PPANEL 1", dxfattribs={"layer": "TITLE", "char_height": 0.12})
+        mt.dxf.insert = (30.0, 1.5)
+        mt.dxf.width = 4.25
+        mt.dxf.attachment_point = 5
+        layout.add_text("NOTES", dxfattribs={"layer": "ANNO", "height": 0.1})
+        path = tmp_path / "tb.dxf"
+        doc.saveas(path)
+        return path
+
+    def test_title_block_read_back_has_width_and_attach(self, capsys, tmp_path):
+        """The DO Draft 2 title-block fit took 22 calls without these fields."""
+        import json
+
+        path = self._title_block(tmp_path)
+        assert probe_dxf.main([str(path), "--text", "--json", "--space", "Layout1", "--layer", "title"]) == 0
+        items = json.loads(capsys.readouterr().out)
+        assert len(items) == 1
+        (mt,) = items
+        assert mt["layer"] == "TITLE" and mt["handle"]
+        assert mt["width"] == 4.25 and mt["attach"] == 5 and mt["height"] == 0.12
+
+    def test_layer_filter_excludes_other_layers(self, capsys, tmp_path):
+        path = self._title_block(tmp_path)
+        assert probe_dxf.main([str(path), "--text", "--space", "Layout1", "--layer", "ANNO"]) == 0
+        out = capsys.readouterr().out
+        assert "NOTES" in out and "DIGITAL" not in out and "w=" not in out
+
     def test_a_missing_file_is_an_error_not_a_traceback(self, capsys, tmp_path):
         assert probe_dxf.main([str(tmp_path / "nope.dxf")]) == 1
         assert "not found" in capsys.readouterr().err

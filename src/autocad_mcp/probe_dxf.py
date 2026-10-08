@@ -137,27 +137,37 @@ def snapshot_file(path: str | Path, cols: int = 24, rows: int = 12, space: str =
 # ---------------------------------------------------------------------------
 
 
-def text_items(doc, space: str = MODEL) -> list[dict]:
+def text_items(doc, space: str = MODEL, layer: str | None = None) -> list[dict]:
     """Every string in a space, with where it sits and what layer it is on.
 
     This is the answer to "what does that label say", which is otherwise a
     screenshot — and a screenshot is the one way of reading text that can be
     confidently wrong.
+
+    MTEXT also carries its wrap width and attachment point, which is what a
+    title-block fit check needs. In DO Draft 2 that read-back took 22 calls and
+    two hand-LISP errors, because the LISP text dump has neither field.
+    ``layer`` filters case-insensitively, the way AutoCAD compares layer names.
     """
     out = []
-    for info in (entity_info(e) for e in entities_in(doc, space)):
+    for entity in entities_in(doc, space):
+        info = entity_info(entity)
         if info.get("text") is None:
             continue
-        out.append(
-            {
-                "type": info["type"],
-                "handle": info["handle"],
-                "layer": info["layer"],
-                "text": info["text"],
-                "insert": info.get("insert"),
-                "height": info.get("height"),
-            }
-        )
+        if layer is not None and info["layer"].upper() != layer.upper():
+            continue
+        item = {
+            "type": info["type"],
+            "handle": info["handle"],
+            "layer": info["layer"],
+            "text": info["text"],
+            "insert": info.get("insert"),
+            "height": info.get("height"),
+        }
+        if entity.dxftype() == "MTEXT":
+            item["width"] = entity.dxf.get("width", 0.0)
+            item["attach"] = entity.dxf.get("attachment_point", 1)
+        out.append(item)
     return out
 
 
@@ -174,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cols", type=int, default=24, help="snapshot grid columns")
     parser.add_argument("--rows", type=int, default=12, help="snapshot grid rows")
     parser.add_argument("--text", action="store_true", help="dump every string instead of the grid")
+    parser.add_argument("--layer", help="with --text, only strings on this layer")
     parser.add_argument("--spaces", action="store_true", help="list the layouts and exit")
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
     args = parser.parse_args(argv)
@@ -195,14 +206,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.text:
-            items = text_items(doc, args.space)
+            items = text_items(doc, args.space, layer=args.layer)
             if args.json:
                 print(_json.dumps(items, indent=2))
             else:
                 for it in items:
                     where = it["insert"]
                     at = f"({where[0]}, {where[1]})" if where else "?"
-                    print(f'{it["handle"]:>8}  {it["layer"]:<20} {at:<24} {it["text"]!r}')
+                    size = f'h={it["height"]}' if it["height"] is not None else ""
+                    if "width" in it:
+                        size += f' w={it["width"]} att={it["attach"]}'
+                    print(f'{it["handle"]:>8}  {it["layer"]:<20} {at:<24} {size:<22} {it["text"]!r}')
                 print(f"\n{len(items)} string(s) in {args.space}")
             return 0
 
