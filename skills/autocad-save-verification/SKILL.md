@@ -46,6 +46,15 @@ SAVEAS's first answer is the file format, and `""` keeps the current one. From a
 (errno 4) and wrote nothing, while a hand SAVEAS passing `"2018"` worked 3/3.
 `drawing(save, path)` now passes `"2018"` itself whenever `DWGNAME` ends in `.dwt`. A
 `.dwg` still passes `""`, so an older drawing is never upgraded behind your back.
+Verified live the same day: `C:/temp/x.dwg` was created, `DWGNAME` retargeted, and the
+template's mtime stayed at 09:36:03.
+
+That run also returned `save_unverified` / `"timestamp unchanged"` for a file that had
+just been created. AutoCAD stamps a `.dwg` mtime to the whole second (`12:14:20.000000`),
+and the old check compared it against `time.time()` from the start of the call. The
+check now compares the file's own `(mtime, size)` before and after, so a new file or any
+change counts. If you see `save_unverified` from a server older than that fix, look at
+the file before believing it.
 
 Do the SAVEAS **before any edit** so the template can never take the changes. Then call
 `(mcp:whoami)`: it should name the new file, and the template's mtime should be unchanged.
@@ -56,7 +65,9 @@ Repeat from the template tab for each new drawing.
 `drawing(plot_pdf)` leaves `DBMOD` above 0 (5 observed, on a drawing that had just been
 saved). The cause is the handler's own viewport-layer entmod. The payload now reports
 `dbmod_before`/`dbmod_after`, plus `dbmod_restored` when `acad-push-dbmod` exists to undo the
-change. A `hint` appears whenever the plot left the drawing dirty. Order the end of a build as **plot, then `drawing(save)`, then confirm `DBMOD` is 0**;
+change. **LT 2027 has `acad-push-dbmod`** (`(type acad-push-dbmod)` → `EXRXSUBR`), and
+on 2026-10-08 a plot of a just-saved drawing returned `dbmod_before` 0, `dbmod_after` 0,
+`dbmod_restored:true`. A `hint` appears whenever the plot left the drawing dirty. Order the end of a build as **plot, then `drawing(save)`, then confirm `DBMOD` is 0**;
 plotting after the save leaves the file clean on disk but the document dirty, and any later
 edit-then-replot needs a save again.
 

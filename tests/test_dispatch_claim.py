@@ -169,3 +169,72 @@ class TestPingVersion:
             result = await backend.initialize()
         assert result.ok
         assert backend._dispatcher_version == version
+
+
+class TestSaveVerification:
+    """drawing(save, path) wrote x.dwg from a .dwt and still came back
+    save_unverified: AutoCAD stamped the mtime 12:14:20.000000, inside the
+    second the call began, and the check compared it to time.time()."""
+
+    @staticmethod
+    def _save(backend, path, write):
+        from autocad_mcp.backends.base import CommandResult
+
+        async def dispatch(cmd, data):
+            write()
+            return CommandResult(ok=True, payload={"path": path})
+
+        return patch.object(backend, "_dispatch", side_effect=dispatch)
+
+    @pytest.mark.asyncio
+    async def test_new_file_stamped_to_the_whole_second_is_verified(self, tmp_path):
+        import os
+        import time
+
+        backend = _backend(tmp_path, version=2)
+        out = tmp_path / "x.dwg"
+        whole = int(time.time())
+
+        def write():
+            out.write_bytes(b"dwg")
+            os.utime(out, (whole, whole))
+
+        with self._save(backend, str(out), write):
+            result = await backend.drawing_save(str(out))
+        assert result.ok, result.error
+
+    @pytest.mark.asyncio
+    async def test_rewrite_with_new_size_is_verified(self, tmp_path):
+        import os
+
+        backend = _backend(tmp_path, version=2)
+        out = tmp_path / "x.dwg"
+        out.write_bytes(b"old")
+        stamp = out.stat().st_mtime
+
+        def write():
+            out.write_bytes(b"longer")
+            os.utime(out, (stamp, stamp))
+
+        with self._save(backend, str(out), write):
+            result = await backend.drawing_save(str(out))
+        assert result.ok, result.error
+
+    @pytest.mark.asyncio
+    async def test_untouched_existing_file_is_unverified(self, tmp_path):
+        backend = _backend(tmp_path, version=2)
+        out = tmp_path / "x.dwg"
+        out.write_bytes(b"old")
+        with self._save(backend, str(out), lambda: None):
+            result = await backend.drawing_save(str(out))
+        assert result.error == "save_unverified"
+        assert result.payload["detail"] == "timestamp unchanged"
+
+    @pytest.mark.asyncio
+    async def test_missing_file_is_unverified(self, tmp_path):
+        backend = _backend(tmp_path, version=2)
+        out = tmp_path / "x.pdf"
+        with self._save(backend, str(out), lambda: None):
+            result = await backend.drawing_plot_pdf(str(out))
+        assert result.error == "save_unverified"
+        assert result.payload["detail"] == "file not found"

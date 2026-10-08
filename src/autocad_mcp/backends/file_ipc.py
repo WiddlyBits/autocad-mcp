@@ -418,23 +418,35 @@ class FileIPCBackend(AutoCADBackend):
 
     # --- Drawing management ---
 
-    def _verify_file_written(self, path: str, time_before: float) -> CommandResult | None:
-        """Return an error CommandResult if path is absent or its mtime is not newer."""
+    @staticmethod
+    def _file_state(path: str) -> tuple[int, int] | None:
+        """(mtime_ns, size) of path, or None when it does not exist."""
         try:
-            if not os.path.exists(path):
-                return CommandResult(
-                    ok=False, error="save_unverified",
-                    payload={"detail": "file not found", "path": path},
-                )
-            if os.path.getmtime(path) <= time_before:
-                return CommandResult(
-                    ok=False, error="save_unverified",
-                    payload={"detail": "timestamp unchanged", "path": path},
-                )
-        except OSError as e:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _verify_file_written(
+        self, path: str, before: tuple[int, int] | None
+    ) -> CommandResult | None:
+        """Return an error CommandResult unless path is new or its mtime/size moved.
+
+        Compares against the file's own state from before the call, not the
+        wall clock: AutoCAD stamps a .dwg mtime to the whole second, so a save
+        landing inside the second it started compared <= time.time() and read
+        as unchanged (x.dwg from a .dwt, 2026-10-08).
+        """
+        after = self._file_state(path)
+        if after is None:
             return CommandResult(
                 ok=False, error="save_unverified",
-                payload={"detail": str(e), "path": path},
+                payload={"detail": "file not found", "path": path},
+            )
+        if after == before:
+            return CommandResult(
+                ok=False, error="save_unverified",
+                payload={"detail": "timestamp unchanged", "path": path},
             )
         return None
 
@@ -442,19 +454,19 @@ class FileIPCBackend(AutoCADBackend):
         return await self._dispatch("drawing-info", {})
 
     async def drawing_save(self, path: str | None = None) -> CommandResult:
-        time_before = time.time()
+        before = self._file_state(path) if path else None
         result = await self._dispatch("drawing-save", {"path": path})
         if result.ok and path:
-            err = self._verify_file_written(path, time_before)
+            err = self._verify_file_written(path, before)
             if err:
                 return err
         return result
 
     async def drawing_save_as_dxf(self, path: str) -> CommandResult:
-        time_before = time.time()
+        before = self._file_state(path)
         result = await self._dispatch("drawing-save-as-dxf", {"path": path})
         if result.ok:
-            err = self._verify_file_written(path, time_before)
+            err = self._verify_file_written(path, before)
             if err:
                 return err
         return result
@@ -466,10 +478,10 @@ class FileIPCBackend(AutoCADBackend):
         return await self._dispatch("drawing-purge", {})
 
     async def drawing_plot_pdf(self, path: str) -> CommandResult:
-        time_before = time.time()
+        before = self._file_state(path)
         result = await self._dispatch("drawing-plot-pdf", {"path": path})
         if result.ok:
-            err = self._verify_file_written(path, time_before)
+            err = self._verify_file_written(path, before)
             if err:
                 return err
         return result
