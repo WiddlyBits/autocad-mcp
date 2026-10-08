@@ -155,17 +155,17 @@ class TestPingVersion:
         ({"pong": True, "dispatcher": 2}, 2),
     ])
     @pytest.mark.asyncio
-    async def test_initialize_reads_version(self, payload, version):
+    async def test_initialize_reads_version(self, tmp_path, payload, version):
         from autocad_mcp.backends.base import CommandResult
-        from autocad_mcp.backends.file_ipc import FileIPCBackend
 
-        backend = FileIPCBackend()
+        # tmp_path, not the default C:/temp: execute_lisp writes a .lsp there,
+        # which only works on a machine where C:/temp already exists.
+        backend = _backend(tmp_path, version=None)
         replies = [CommandResult(ok=True, payload=payload), CommandResult(ok=True, payload="ACADLT")]
         with patch("autocad_mcp.backends.file_ipc.find_autocad_window", return_value=1), \
                 patch.object(backend, "_find_command_line_hwnd", return_value=None), \
                 patch.object(backend, "_cleanup_stale_files"), \
-                patch.object(backend, "_dispatch", side_effect=replies), \
-                patch.object(backend._ipc_dir.__class__, "mkdir"):
+                patch.object(backend, "_dispatch", side_effect=replies):
             result = await backend.initialize()
         assert result.ok
         assert backend._dispatcher_version == version

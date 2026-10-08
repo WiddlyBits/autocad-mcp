@@ -48,7 +48,11 @@ upstream  https://github.com/puran-water/autocad-mcp.git  <- author's repo, pull
 - **Verify every push independently** with `git ls-remote --heads origin <branch>`, comparing the
   SHA to local `HEAD`. Exit 0 alone is not proof.
 - Claude never supplies the credential; Gianni authenticates in GCM's own UI.
-- **No `gh` CLI installed.** Build the compare URL by hand and let Gianni decide whether to submit:
+- **`gh` CLI is installed** (`C:\Program Files\GitHub CLI`, on Git Bash PATH) and authenticated as
+  WiddlyBits via keyring. Use it for CI: `gh run list -R WiddlyBits/autocad-mcp`,
+  `gh run view <id> -R WiddlyBits/autocad-mcp --log-failed`. CI runs on `ubuntu-latest`, so a
+  test that only passes because `C:/temp` exists locally will fail there.
+- For PRs to upstream, build the compare URL by hand and let Gianni decide whether to submit:
   `https://github.com/puran-water/autocad-mcp/compare/main...WiddlyBits:autocad-mcp:<branch>?expand=1`
 - Identity is set **repo-local only** to `Gianni <giannimagnabooking@gmail.com>` — deliberately not
   global. Never commit as `hvkshetry`.
