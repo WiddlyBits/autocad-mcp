@@ -1,59 +1,148 @@
 <#
 .SYNOPSIS
-  Deploy the repo's skills into the Claude skills directory.
+  Preview, check, or package the repo's skills.
 
 .DESCRIPTION
-  The canonical copy of these skills is here, in git, next to the MCP server
-  they document. The live copies live under paths whose GUIDs the app owns
-  and can re-provision:
+  The repo's skills\ folder is the only source of truth. Every other copy is a
+  build artifact:
 
-    %APPDATA%\Claude\local-agent-mode-sessions\skills-plugin\<guid>\<guid>\skills\
-    ~\.claude\skills\synced\<guid>_<guid>\        (only dirs holding manifest.json)
+    ~\.claude\skills\synced\<guid>_<guid>\   (dirs holding a manifest.json)
+        Written by the claude.ai skill sync. Copying into it here is a LOCAL
+        PREVIEW: the next sync round overwrites it with whatever claude.ai holds.
+    claude.ai -> Customize -> Skills
+        Delivery. Gianni uploads the -Package zips there after a merge to main.
 
-  That directory is a deployment target, not a source. Editing it in place is
-  how the skill drifted ahead of the code on 2026-08-22: it documented a
-  preflight block and an mcp_select.lsp that existed only on an unmerged
-  branch, and nothing could catch the divergence because one half was not
-  under version control.
+  Editing a loaded copy is how the skill drifted ahead of the code on
+  2026-08-22: it documented a preflight block and an mcp_select.lsp that existed
+  only on an unmerged branch, and nothing could catch it because one half was
+  not under version control. -Check is what catches it now.
 
-  The GUIDs are globbed rather than hardcoded, because hardcoding them is the
-  same bet that failed. Every matching skills root is synced; a stale one
-  receiving a current copy is harmless, a missed live one is not.
+  skills\** is pinned to LF in .gitattributes, so a byte comparison is valid.
+
+.PARAMETER Check
+  Compare every loaded copy with the repo, byte for byte, including
+  references\. Also check that each repo skill is in the manifest with an
+  updatedAt at or after the last commit touching skills\. Exit 1 on any drift.
+  Copies nothing.
+
+.PARAMETER Package
+  Write dist\<skill>.zip for each skill, rooted at the skill folder, for the
+  claude.ai upload. Copies nothing to the loaded folders.
 
 .PARAMETER WhatIf
-  Report what would be copied without writing anything.
+  With no switch: report what would be copied without writing anything.
 #>
 [CmdletBinding(SupportsShouldProcess)]
-param()
+param(
+    [switch]$Check,
+    [switch]$Package
+)
 
 $ErrorActionPreference = 'Stop'
 
-$source = Join-Path $PSScriptRoot '..\skills' | Resolve-Path -ErrorAction Stop
-$pattern = Join-Path $env:APPDATA 'Claude\local-agent-mode-sessions\skills-plugin\*\*\skills'
-$targets = @(Get-ChildItem -Path $pattern -Directory -ErrorAction SilentlyContinue)
+$repo = Join-Path $PSScriptRoot '..' | Resolve-Path -ErrorAction Stop
+$source = Join-Path $repo 'skills' | Resolve-Path -ErrorAction Stop
+$skills = @(Get-ChildItem -Path $source -Directory)
+if ($skills.Count -eq 0) { Write-Error "No skills in $source" }
 
-# Current location (verified 2026-10-08): ~\.claude\skills\synced\<guid>_<guid>\ holds the
-# skill folders directly, next to a manifest.json. Only dirs with that manifest qualify, so a
-# stray folder is never treated as a target.
+function Get-RelativeFiles($root) {
+    $prefix = $root.TrimEnd('\') + '\'
+    Get-ChildItem -Path $root -Recurse -File |
+        ForEach-Object { $_.FullName.Substring($prefix.Length) } |
+        Sort-Object
+}
+
+if ($Package) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $dist = Join-Path $repo 'dist'
+    New-Item -ItemType Directory -Force -Path $dist | Out-Null
+    foreach ($skill in $skills) {
+        $zipPath = Join-Path $dist "$($skill.Name).zip"
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+        $zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+        try {
+            foreach ($rel in Get-RelativeFiles $skill.FullName) {
+                # Forward slashes: a backslash entry name unpacks as one flat filename off Windows.
+                $entry = "$($skill.Name)/" + ($rel -replace '\\', '/')
+                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                    $zip, (Join-Path $skill.FullName $rel), $entry, 'Optimal') | Out-Null
+            }
+        } finally { $zip.Dispose() }
+        $n = @(Get-RelativeFiles $skill.FullName).Count
+        Write-Host "   $zipPath  ($n files)"
+    }
+    Write-Host ""
+    Write-Host "Packaged $($skills.Count) skill(s) into $dist."
+    Write-Host "Upload: claude.ai -> Customize -> Skills, then run -Check."
+    return
+}
+
 $syncedPattern = Join-Path $HOME '.claude\skills\synced\*'
-$targets += @(Get-ChildItem -Path $syncedPattern -Directory -ErrorAction SilentlyContinue |
+$targets = @(Get-ChildItem -Path $syncedPattern -Directory -ErrorAction SilentlyContinue |
     Where-Object { Test-Path (Join-Path $_.FullName 'manifest.json') })
 
 if ($targets.Count -eq 0) {
     Write-Error @"
-No skills directory found under:
-  $pattern
+No loaded skills directory found under
   $syncedPattern (with a manifest.json)
 The GUID path may have been re-provisioned, or Claude has not created it yet.
-Nothing was copied.
 "@
 }
 
-$skills = @(Get-ChildItem -Path $source -Directory)
-if ($skills.Count -eq 0) { Write-Error "No skills to sync in $source" }
+if ($Check) {
+    $drift = 0
+    $lastCommit = (& git -C $repo log -1 --format=%cI -- skills) | Out-String
+    $lastCommit = [DateTimeOffset]::Parse($lastCommit.Trim())
+    Write-Host "Last commit touching skills\: $($lastCommit.ToString('u'))"
+    foreach ($target in $targets) {
+        Write-Host "-> $($target.FullName)"
+        $manifest = Get-Content (Join-Path $target.FullName 'manifest.json') -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+        foreach ($skill in $skills) {
+            $problems = @()
+            $dest = Join-Path $target.FullName $skill.Name
+            if (-not (Test-Path $dest)) {
+                $problems += 'not loaded'
+            } else {
+                $want = @(Get-RelativeFiles $skill.FullName)
+                $have = @(Get-RelativeFiles $dest)
+                $missing = @($want | Where-Object { $have -notcontains $_ })
+                $extra = @($have | Where-Object { $want -notcontains $_ })
+                if ($missing) { $problems += "missing: $($missing -join ', ')" }
+                if ($extra) { $problems += "extra: $($extra -join ', ')" }
+                foreach ($rel in ($want | Where-Object { $have -contains $_ })) {
+                    $a = (Get-FileHash (Join-Path $skill.FullName $rel)).Hash
+                    $b = (Get-FileHash (Join-Path $dest $rel)).Hash
+                    if ($a -ne $b) { $problems += "differs: $rel" }
+                }
+            }
+            $entry = @($manifest.skills | Where-Object { $_.name -eq $skill.Name })
+            if ($entry.Count -eq 0) {
+                $problems += 'not in manifest'
+            } elseif ([DateTimeOffset]::Parse($entry[0].updatedAt) -lt $lastCommit) {
+                $problems += "manifest updatedAt $($entry[0].updatedAt) predates the last skills\ commit"
+            }
+            if ($problems) {
+                $drift++
+                Write-Host "   DRIFT  $($skill.Name)"
+                $problems | ForEach-Object { Write-Host "            $_" }
+            } else {
+                Write-Host "   ok     $($skill.Name)"
+            }
+        }
+    }
+    Write-Host ""
+    if ($drift) {
+        Write-Host "$drift skill/location pair(s) drifted."
+        exit 1
+    }
+    Write-Host "No drift."
+    exit 0
+}
 
 foreach ($target in $targets) {
-    Write-Host "-> $($target.FullName)"
+    Write-Host "-> $($target.FullName)  (local preview; the next sync round overwrites it)"
     foreach ($skill in $skills) {
         $dest = Join-Path $target.FullName $skill.Name
         if ($PSCmdlet.ShouldProcess($dest, "sync $($skill.Name)")) {
