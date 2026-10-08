@@ -20,6 +20,7 @@ and origin points for every error code mentioned below.
 | `WRONG-DOC` / `wrong_doc` | Yes | After switching focus to the correct document. |
 | `UNRESOLVED-REF` | Yes | After rebuilding the selection set. |
 | `command_active` | Yes | After the active command completes (same as `autocad_busy`). |
+| `timeout_not_dispatched` | Yes | Already retried once by the dispatcher; check focus / `(mcp:whoami)` first. |
 | `timeout_mutating` | **Never** | Command may have been applied; inspect drawing state first. |
 | `save_unverified` | **Never** | LISP reported success; inspect `drawing(info)` before re-saving. |
 | `vlax_not_supported_in_lt` | **Never** | Rewrite the LISP to remove `vlax-` dependency. |

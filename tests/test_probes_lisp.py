@@ -747,7 +747,9 @@ class TestSaveIsHonestAboutNotSaving:
         the "_Y" and written with it.
         """
         arm = self.saveas_arm()
-        assert '(list "_.SAVEAS" "" path "_Y")' in arm, (
+        # The format token before path is "" or "2018" (.dwt) — see
+        # tests/test_dispatch_claim.py; this test is about the trailing "_Y".
+        assert re.search(r'\(list "_\.SAVEAS"[^"]*(?:"[^"]*"[^"]*)*?path "_Y"\)', arm), (
             "the path form leaves SAVEAS's overwrite prompt unanswered, so "
             "saving over an existing file reports a failure that did not happen"
         )

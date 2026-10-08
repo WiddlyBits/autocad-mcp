@@ -17,6 +17,10 @@
 ;; IPC directory
 (setq *mcp-ipc-dir* "C:/temp/")
 
+;; Reported by ping. 2 = c:mcp-dispatch claims cmd_<id> by renaming it to
+;; run_<id> before dispatching (file_ipc.py gates timeout_not_dispatched on it).
+(setq *mcp-dispatcher-version* 2)
+
 ;; -----------------------------------------------------------------------
 ;; JSON-like output helpers (minimal, no external library)
 ;; -----------------------------------------------------------------------
@@ -229,7 +233,7 @@
     (cond
     ;; --- Ping ---
     ((= cmd-name "ping")
-     (cons T "\"pong\""))
+     (cons T (strcat "{\"pong\":true,\"dispatcher\":" (itoa *mcp-dispatcher-version*) "}")))
 
     ;; --- Freehand LISP execution ---
     ((= cmd-name "execute-lisp")
@@ -395,7 +399,16 @@
            ;; no prompt to consume it, and the extra token is then discarded
            ;; with the command already complete — verified live, CMDACTIVE 0 and
            ;; the next call unaffected.
-           (vl-catch-all-apply 'vl-cmdf (list "_.SAVEAS" "" path "_Y"))
+           ;;
+           ;; The first token answers the file-format prompt. "" keeps the
+           ;; current format, which for an open .dwt is Template — so a .dwg
+           ;; SAVEAS from a template failed until "2018" was passed by hand
+           ;; (3/3 live, DO Draft 2). Only templates get the explicit version;
+           ;; a .dwg keeps "" so an older drawing is never silently upgraded.
+           (vl-catch-all-apply 'vl-cmdf
+             (list "_.SAVEAS"
+                   (if (wcmatch (strcase (getvar "DWGNAME")) "*.DWT") "2018" "")
+                   path "_Y"))
            (command)   ; clear anything a refused SAVEAS left at the prompt
            (setvar "FILEDIA" filedia)
            (setq doc-after (mcp-active-document-path))
@@ -1577,10 +1590,17 @@
   )
 )
 
-(defun mcp-cmd-drawing-plot-pdf (params / path prev-filedia vp-la orig-plot lmin lmax pt1 pt2)
+(defun mcp-cmd-drawing-plot-pdf (params / path prev-filedia vp-la orig-plot lmin lmax pt1 pt2 dbmod-before pushed)
   (setq path (mcp-json-get-string params "path"))
   (if path
     (progn
+      ; The 290 toggle below is an entmod, and an entmod sets DBMOD bit 1 even
+      ; when the net change is zero — so a plot of a saved drawing left it dirty
+      ; (DBMOD 5, DO Draft 2). Bracket the plot with acad-push-dbmod/pop where
+      ; they exist; LT may not have them, so report before/after either way.
+      (setq dbmod-before (getvar "DBMOD"))
+      (if (setq pushed (and acad-push-dbmod acad-pop-dbmod))
+        (acad-push-dbmod))
       ; Suppress viewport frame in the PDF: toggle its layer's plot flag (group
       ; code 290: 1=plot, 0=no-plot) and restore it unconditionally after.
       (setq vp-la nil orig-plot 1)
@@ -1605,7 +1625,15 @@
       (setvar "FILEDIA" prev-filedia)
       (if vp-la
         (entmod (subst (cons 290 orig-plot) (assoc 290 (entget vp-la)) (entget vp-la))))
-      (cons T (strcat "{\"path\":\"" (mcp-escape-string path) "\"}")))
+      (if pushed (acad-pop-dbmod))
+      (cons T (strcat "{\"path\":\"" (mcp-escape-string path) "\""
+                      ",\"dbmod_before\":" (itoa dbmod-before)
+                      ",\"dbmod_after\":" (itoa (getvar "DBMOD"))
+                      ",\"dbmod_restored\":" (if pushed "true" "false")
+                      (if (/= 0 (getvar "DBMOD"))
+                        ",\"hint\":\"plot dirties the drawing; save after plotting\""
+                        "")
+                      "}")))
     (cons nil "Plot path required")
   )
 )
@@ -1671,15 +1699,20 @@
 ;; -----------------------------------------------------------------------
 
 (defun c:mcp-dispatch ( / cmd-files cmd-file json-text request-id cmd-name params-str result result-file)
-  "Find pending command file, dispatch, write result."
+  "Find pending command file, claim it, dispatch, write result."
   ;; Find first pending command file
   (setq cmd-files (vl-directory-files *mcp-ipc-dir* "autocad_mcp_cmd_*.json" 1))
   (if (not cmd-files)
     (progn (princ "\nMCP: No pending commands") (princ))
     (progn
-      ;; Process first command
-      (setq cmd-file (strcat *mcp-ipc-dir* (car cmd-files)))
-      (setq json-text (mcp-read-file-lines cmd-file))
+      ;; Claim: rename cmd_<id> to run_<id> before anything runs. Python's
+      ;; timeout path deletes cmd_<id>; if that delete succeeds the command was
+      ;; never claimed and cannot have applied. A failed rename means Python
+      ;; already withdrew it, so do nothing.
+      (setq cmd-file (strcat *mcp-ipc-dir* "autocad_mcp_run_" (substr (car cmd-files) 17)))
+      (setq json-text
+        (if (vl-file-rename (strcat *mcp-ipc-dir* (car cmd-files)) cmd-file)
+          (mcp-read-file-lines cmd-file)))
 
       (if (not json-text)
         (princ "\nMCP: Cannot read command file")

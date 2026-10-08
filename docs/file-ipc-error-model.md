@@ -59,6 +59,18 @@ caller's perspective; `never-retry` means the command must be assumed potentiall
 
 ---
 
+### `timeout_not_dispatched`
+
+| Field | Value |
+|---|---|
+| **Origin** | Python-dispatch |
+| **Trigger** | The IPC channel timed out, and the command file was still unclaimed, so Python could delete it. Requires dispatcher v2 (ping reports `"dispatcher":2`). That dispatcher renames `cmd_<id>` to `run_<id>` before it runs anything. |
+| **Payload** | `may_have_applied: false`, `request_id: <str>` |
+| **Retry policy** | `safe-to-retry`. The dispatcher already retries once on its own, so this code reaches the caller only after two unclaimed attempts. The usual cause is that the trigger keystroke went to a window that was not at the command prompt (a tab switch, or a dialog). |
+| **Notes** | Takes precedence over `timeout_mutating`. With a v1 dispatcher, behaviour is unchanged. |
+
+---
+
 ### *(plain string timeout)*
 
 | Field | Value |

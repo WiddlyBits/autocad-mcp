@@ -83,6 +83,9 @@ class FileIPCBackend(AutoCADBackend):
         self._lock = asyncio.Lock()  # Single in-flight command
         self.is_lt: bool = False
         self._status_file = self._ipc_dir / "mcp_status.txt"
+        # Set from the ping reply. >= 2 means LISP claims cmd files by renaming
+        # them before dispatch, so a timeout can tell "never started" apart.
+        self._dispatcher_version: int = 1
 
     @property
     def name(self) -> str:
@@ -129,6 +132,10 @@ class FileIPCBackend(AutoCADBackend):
 
         # Ping the dispatcher to verify it's loaded
         result = await self._dispatch("ping", {})
+        if result.ok:
+            # Old dispatchers reply with a bare "pong" and no version.
+            payload = result.payload
+            self._dispatcher_version = payload.get("dispatcher", 1) if isinstance(payload, dict) else 1
         if not result.ok:
             lisp_path = str(LISP_DIR / "mcp_dispatch.lsp").replace("\\", "/")
             return CommandResult(
@@ -193,8 +200,17 @@ class FileIPCBackend(AutoCADBackend):
         async with self._lock:
             return await self._dispatch_unlocked(command, params)
 
-    async def _dispatch_unlocked(self, command: str, params: dict) -> CommandResult:
+    async def _dispatch_unlocked(self, command: str, params: dict, _retried: bool = False) -> CommandResult:
         """Core IPC logic (must be called under _lock)."""
+        result = await self._dispatch_once(command, params)
+        if result.error != "timeout_not_dispatched" or _retried:
+            return result
+        # The command never started, so re-sending cannot double-apply it.
+        log.warning("timeout_not_dispatched_retry", command=command)
+        return await self._dispatch_unlocked(command, params, _retried=True)
+
+    async def _dispatch_once(self, command: str, params: dict) -> CommandResult:
+        """Write one command file, trigger the dispatcher, and wait for its result."""
         request_id = uuid.uuid4().hex[:12]
         cmd_file = self._ipc_dir / f"autocad_mcp_cmd_{request_id}.json"
         result_file = self._ipc_dir / f"autocad_mcp_result_{request_id}.json"
@@ -268,6 +284,12 @@ class FileIPCBackend(AutoCADBackend):
                         pass  # File may be partially written, retry
                 await asyncio.sleep(POLL_INTERVAL)
 
+            if self._dispatcher_version >= 2 and self._withdraw(cmd_file):
+                return CommandResult(
+                    ok=False,
+                    error="timeout_not_dispatched",
+                    payload={"may_have_applied": False, "request_id": request_id},
+                )
             if command in _MUTATING_COMMANDS:
                 return CommandResult(
                     ok=False,
@@ -295,11 +317,24 @@ class FileIPCBackend(AutoCADBackend):
         """
         found: list[Path] = []
         try:
-            for pattern in ("autocad_mcp_cmd_*.json", "autocad_mcp_result_*.json"):
+            for pattern in ("autocad_mcp_cmd_*.json", "autocad_mcp_run_*.json", "autocad_mcp_result_*.json"):
                 found.extend(self._ipc_dir.glob(pattern))
         except OSError:
             pass
         return found
+
+    @staticmethod
+    def _withdraw(cmd_file: Path) -> bool:
+        """Delete an unclaimed command file. True means LISP never claimed it.
+
+        The v2 dispatcher renames cmd_<id> to run_<id> before running anything,
+        so a cmd file that still exists to be deleted cannot have applied.
+        """
+        try:
+            cmd_file.unlink()
+            return True
+        except OSError:
+            return False
 
     def _find_command_line_hwnd(self) -> int | None:
         """Find AutoCAD's MDIClient child window for command routing."""
