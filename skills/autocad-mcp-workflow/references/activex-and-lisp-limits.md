@@ -5,26 +5,15 @@ restrictions, but assume LT's limits apply unless told otherwise.
 
 ## Object-creation calls hang the dispatcher
 
-AutoCAD LT has restricted ActiveX support. Calls that *create* new objects — for
-example `vla-AddPViewport`, or `vla-Add` on a Layers collection — hang the dispatcher
-and leave AutoCAD stuck in an active command state. Nothing gets applied, but the
-call doesn't return either.
+Calls that *create* objects — `vla-AddPViewport`, `vla-Add` on a Layers collection — hang
+the dispatcher in an active command state: nothing applied, no return. Getters and setters on
+*existing* objects work (`vla-get-*`, `vla-put-Width`, `-Height`, `-Center`, `-Plottable`).
+Create through the MCP tools (`layer` create, `entity` ops) or `(command "_.-LAYER" ...)`,
+`_.RECTANG`, `_.TEXT` — never `vla-Add`.
 
-Property getters and setters on *existing* objects work fine:
-`vla-put-Width`, `vla-put-Height`, `vla-put-Center`, `vla-put-Plottable`,
-`vla-get-*`, etc.
-
-**Preferred approach:** for creating things, use the MCP's own higher-level tools
-(`layer` create, `entity` ops) which route through the AutoCAD command line rather
-than raw ActiveX creation. When you do need raw AutoLISP for creation, prefer
-command-line functions — `_.RECTANG`, `_.-LAYER`, `_.MOVE`, `_.TEXT`, or `(command
-...)` — over `vla-Add`-style ActiveX object creation.
-
-**Recovery signature:** if `execute_lisp` starts timing out but screenshots still
-work, that combination means a hang, not a dead connection. Recovery: ask the user to
-click into the drawing area and press Esc a few times, then re-verify state with
-`drawing(info)` before retrying anything — a blind retry could double-apply whatever
-the hung call was doing.
+**Recovery signature:** `execute_lisp` times out but screenshots still work — a hang, not a
+dead link. Ask the user to click into the drawing and press Esc a few times, then
+`drawing(info)` before anything else; a blind retry can double-apply.
 
 ## Batching to one `.scr` (Rule 4)
 
@@ -37,13 +26,11 @@ the hung call was doing.
 (command "_.SCRIPT" "C:/temp/batch.scr")
 ```
 
-It is also the LT workaround for ActiveX object creation. A script that errors partway leaves
-the drawing partly applied, so verify with `drawing(info)` afterwards.
+A script that errors partway leaves the drawing partly applied; verify with `drawing(info)`.
 
-## Four ways a single call gets thrown away
+## Three ways a single call gets thrown away
 
-Each of these cost a real round trip on 2026-08-22. At ~108 K cache-read per request they
-are worth reading before writing raw AutoLISP rather than after.
+Each cost a real round trip on 2026-08-22.
 
 **`vla-getboundingbox` output symbols collide with locals.** The conventional call is
 `(vla-getboundingbox obj 'mn 'mx)`, which *sets* the symbols `mn` and `mx`. If the same
@@ -68,12 +55,6 @@ nil either way. This was used to check for the probe library and answered `NOT L
 which was not evidence. Use `(type mcp:sel-dump)` — an unbound symbol evaluates to nil in
 AutoLISP rather than erroring, so it is safe and it actually discriminates.
 
-**Write `wcmatch` patterns against text you have read, not text you remember.**
-`"Bank #, Point #"` matched 0 of 152 labels that read as `Bank 1, Point 0` on screen —
-there is a non-obvious character after the comma; `"Bank #*Point #"` matched all 16. Dump
-the literal strings first (`(mcp:sel-dump)` or `(mcp:text-dump-in "Model")`), then write
-the pattern.
-
 ## Rebuilding an entity: the space trap, the silent revert, and the escape hatch
 
 Found on 2026-09-05 converting DI-02's 32 MTEXT labels to Title Case. All three bit in one
@@ -92,15 +73,8 @@ EF0  67=0 410=Model     ; original
 
 On a sheet whose model space is viewed through a scaled viewport, that renders the label at
 paper scale — `0.25` height becomes 0.25 *inches on the sheet*, roughly 30x oversized and
-parked off the drawing. Switch space explicitly, restore the tab, and check `67` on the result:
-
-```lisp
-(setq oldtab (getvar "CTAB"))
-(setvar "CTAB" "Model")               ; entmakex now targets model space
-(setq ne (entmakex (list (cons 0 "MTEXT") (cons 100 "AcDbEntity") (cons 67 0) ...)))
-(setvar "CTAB" oldtab)
-(cdr (assoc 67 (entget ne)))          ; must be 0
-```
+parked off the drawing. Wrap a model-space rebuild in `(mcp:in-model-space (lambda () ...))`
+(Rule 2) and check `(cdr (assoc 67 (entget ne)))` is `0` on the result.
 
 **`entmod` on MTEXT group 41 can report success and silently revert.** Four labels held a
 defined width of `9.24774` that would not move. `entmod` with a substituted `(41 . 3.37387)`
@@ -195,19 +169,14 @@ deleting it — a layer being off/frozen doesn't mean it's junk:
 If a hidden layer turns out to hold something like an as-built/record-drawing stamp
 convention, that's a deliberate feature, not clutter — ask before removing it.
 
-## Duplicating a drawing safely
+## Duplicating a drawing
 
-AutoCAD's own `_.OPEN`/`_.SAVEAS` commands can silently fail — the file dialog pops
-up and gets auto-cancelled (e.g. because `FILEDIA` wasn't suppressed), and the tool
-can still report success. `(command "_.OPEN" path)` has failed silently this way.
-
-The reliable pattern is OS-level copy + ActiveX open, not AutoCAD's native
-open/save-as commands:
+OS copy, then ActiveX open — `(command "_.OPEN" path)` has failed silently (why: the
+`autocad-save-verification` skill). The source must be closed or saved clean first:
 ```powershell
-Copy-Item "source.dwg" "destination.dwg"   # source must be closed/saved-clean first
+Copy-Item "source.dwg" "destination.dwg"
 ```
 ```lisp
 (vla-open (vla-get-Documents (vlax-get-acad-object)) "C:/path/destination.dwg")
 ```
-Then confirm the copy actually opened as the active/focused document (see Rule 2 in
-the main skill) before editing it.
+`vla-open` does not reliably move focus (Rule 2) — `(mcp:whoami)` before editing.
