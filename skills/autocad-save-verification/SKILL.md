@@ -25,7 +25,7 @@ distinguish two drawings with the same name in different folders.
 | Save in place | `drawing(save)` → QSAVE | leaves it where it is; `DBMOD` → 0 |
 | Save to a new path | `SAVEAS` | **retargets** — you are now editing the new file |
 | Export geometry to read back | `drawing(save_as_dxf)` → DXFOUT | leaves the document alone |
-| Export to hand over | `drawing(plot_pdf)` | leaves the document alone |
+| Export to hand over | `drawing(plot_pdf)` | leaves the document in place but **dirties it** (`DBMOD` 5 measured) |
 
 The second row is the one that surprises people. Measured 2026-08-22:
 `(vl-cmdf "_.SAVEAS" "" "C:/temp/mcp_probe_c.dwg" "_Y")` left `DWGNAME` reporting
@@ -36,6 +36,28 @@ stays active, which is precisely the signature behind the standing warning that
 
 So for SAVEAS the check is free and unambiguous: `DWGNAME` afterwards is either the new
 basename (it worked) or the old one (it did not).
+
+### Creating a drawing from a `.dwt`
+
+Measured 2026-10-08 (three DO drawings built from one template): with the `.dwt` active,
+`drawing(save, data={"path": "….dwg"})` returned `ok:false` (errno 4), wrote nothing, and
+left the template active. Plain `execute_lisp` worked three times out of three:
+
+```
+(command "_.SAVEAS" "2018" "C:/path/New Name.dwg")   ; then (getvar "DWGNAME")
+```
+
+Do the SAVEAS **before any edit** so the template can never take the changes, then
+confirm `DWGNAME` is the new name and the file exists on disk. This run did not go through
+`mcp:verify-write`; the evidence was `DWGNAME`, the file's size and mtime, and an
+unchanged template mtime. Repeat the same SAVEAS from the template tab for each new drawing.
+
+### Plot first, save last
+
+`drawing(plot_pdf)` leaves `DBMOD` above 0 (5 observed, on a drawing that had just been
+saved). Order the end of a build as **plot, then `drawing(save)`, then confirm `DBMOD` is 0**;
+plotting after the save leaves the file clean on disk but the document dirty, and any later
+edit-then-replot needs a save again.
 
 ## The one call that does the whole check
 

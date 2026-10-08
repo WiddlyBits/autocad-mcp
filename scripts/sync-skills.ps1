@@ -31,10 +31,18 @@ $source = Join-Path $PSScriptRoot '..\skills' | Resolve-Path -ErrorAction Stop
 $pattern = Join-Path $env:APPDATA 'Claude\local-agent-mode-sessions\skills-plugin\*\*\skills'
 $targets = @(Get-ChildItem -Path $pattern -Directory -ErrorAction SilentlyContinue)
 
+# Current location (verified 2026-10-08): ~\.claude\skills\synced\<guid>_<guid>\ holds the
+# skill folders directly, next to a manifest.json. Only dirs with that manifest qualify, so a
+# stray folder is never treated as a target.
+$syncedPattern = Join-Path $HOME '.claude\skills\synced\*'
+$targets += @(Get-ChildItem -Path $syncedPattern -Directory -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path (Join-Path $_.FullName 'manifest.json') })
+
 if ($targets.Count -eq 0) {
     Write-Error @"
 No skills directory found under:
   $pattern
+  $syncedPattern (with a manifest.json)
 The GUID path may have been re-provisioned, or Claude has not created it yet.
 Nothing was copied.
 "@
