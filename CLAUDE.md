@@ -12,11 +12,9 @@ path instead — Dropbox layouts change and blind search costs 10x a question.
 uv run pytest -q
 ```
 
-Expected counts are branch-dependent — **123 on `fix-dev-dependency-group`, 134 on
-`screenshot-token-cost-controls`, 614 on `visual-cost-ladder`, 690 on
-`selection-driven-editing`, 756 on `main`**. A count below the branch's expected number is a
-real failure. Re-measure and update this line whenever a commit changes the count — a stale
-number here turns a real failure into one that reads as normal.
+Expected count on `main`: **756**. A lower count is a real failure. Update this number in the
+same commit that changes it — a stale number turns a real failure into one that reads as
+normal. Feature branches are measured when they are made, not recorded here.
 
 `tests/golden/*.snap` are committed fixtures, not build output. Regenerating them requires both
 `--rebaseline-snapshots` and `AUTOCAD_MCP_REBASELINE=1` — two gates, because rebaselining a red
@@ -59,33 +57,31 @@ upstream  https://github.com/puran-water/autocad-mcp.git  <- author's repo, pull
 
 ## Skills
 
-`skills/` is the canonical copy of the AutoCAD skills — `autocad-mcp-workflow`,
-`autocad-save-verification`, and `title-block-text` — versioned next to the server they
-document. Deploy them with
+`skills/` is the **only** source of truth for the AutoCAD skills — `autocad-mcp-workflow`,
+`autocad-save-verification`, `title-block-text`. Every other copy is a build artifact. Edit
+here, never in a loaded copy: editing a loaded copy is how a skill once documented a
+`preflight` block and an `mcp_select.lsp` that existed only on an unmerged branch.
+
+`skills/** text eol=lf` (`.gitattributes`), so the loaded copies are byte-identical to the
+repo and a plain recursive diff is a valid drift check.
 
 ```
-powershell -File scripts/sync-skills.ps1        # -WhatIf to preview
+powershell -File scripts\sync-skills.ps1           # copy to ~/.claude/skills/synced/<guid>_<guid>/ (local preview)
+powershell -File scripts\sync-skills.ps1 -Check    # diff every loaded copy + manifest updatedAt; exit 1 on drift
+powershell -File scripts\sync-skills.ps1 -Package  # dist\<skill>.zip for the claude.ai upload
 ```
 
-which globs the GUIDs under both
-`%APPDATA%\Claude\local-agent-mode-sessions\skills-plugin\*\*\skills` and
-`~\.claude\skills\synced\<guid>_<guid>\` (only dirs holding a `manifest.json`) rather than
-hardcoding them, because those are exactly what the app re-provisions.
+Run `-Check` at the start of any AutoCAD session that edits skills. The synced folder is a
+**local preview**: the next claude.ai sync round overwrites it, so it is not delivery. Delivery
+is Gianni uploading the `-Package` zips in claude.ai → Customize → Skills after a merge to
+`main`; `-Check` afterwards must list all three in the manifest with `updatedAt` at or after
+the last commit touching `skills/`.
 
-**Edit here, not there.** The AppData copy is a deployment target. Editing it in place is
-how the skill came to document a `preflight` block and an `mcp_select.lsp` that existed
-only on an unmerged branch — a divergence nothing could catch while one half was outside
-version control. That gap closed when `selection-driven-editing` landed on 2026-08-25.
+`tests/test_skill_drift.py` fails CI when a skill names an `mcp:`/`c:` LISP function or a
+`tool(operation=…)` that does not exist in `src/` or `lisp-code/`.
 
-### LISP / probe error contracts
-
-Exact payload signatures — match these without re-reading the LSP files:
-
-- **`WRONG-DOC`** — `{"ok":false,"error":"WRONG-DOC","wanted_dwg":…,"wanted_tab":…,"actual_dwg":…,"actual_tab":…}`. Use `actual_dwg`/`actual_tab` directly; no round-trip re-probe needed.
-- **`UNRESOLVED-REF`** — `{"ok":false,"error":"UNRESOLVED-REF","ref":…}`. The reference coordinate was not found in the selection set; check `(mcp:sel-dump)` coordinates before retrying.
-- **Probe truncation** — `"truncated":true,"truncated_reason":"max_entities"|"time"`. Fix: switch to the `-in` form with a specific layer or tighter region.
-- **sel-dump truncation** — `"truncated":true` in the sel-dump payload (count > `*mcp-max-selection*` = 200). Re-select a tighter set.
-- **Long inline LISP breaks JSON** — any `execute_lisp` body with nested double-quotes beyond 2 levels, or longer than ~400 bytes, must be written to a temp `.lsp` file and loaded via `(load "path")` — never inlined. Inlining at that size breaks JSON envelope parsing, not just costs round-trips.
+Error payloads and what to do about them: `skills/autocad-mcp-workflow/references/troubleshooting.md`.
+Developer detail: `docs/error-model.md`. Open defects: `docs/known-issues.md`.
 
 ## Screenshot cost controls
 
@@ -94,5 +90,5 @@ Exact payload signatures — match these without re-reading the LSP files:
 (`_resize_and_encode`, PIL), threaded through `base.py` / `file_ipc.py` / `ezdxf_backend.py` /
 `client.py` / `server.py`. Payload shape is `{"data":..., "mime":...}`, not a bare base64 string.
 
-`quality` (JPEG) shrinks bytes on the wire but **does not** reduce token cost — cost is
-`ceil(w/28) × ceil(h/28)`, a function of dimensions only. Nothing above 2576 px helps.
+Cost guidance for the agent (the token formula, `region`, `save_to`) lives in Rule 3 of the
+workflow skill, not here.
