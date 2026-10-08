@@ -14,7 +14,7 @@ uv run pytest -q
 
 Expected counts are branch-dependent — **123 on `fix-dev-dependency-group`, 134 on
 `screenshot-token-cost-controls`, 614 on `visual-cost-ladder`, 690 on
-`selection-driven-editing`, 736 on `main`, 756 on `do-draft2-fixes`**. A count below the branch's expected number is a
+`selection-driven-editing`, 756 on `main`**. A count below the branch's expected number is a
 real failure. Re-measure and update this line whenever a commit changes the count — a stale
 number here turns a real failure into one that reads as normal.
 
