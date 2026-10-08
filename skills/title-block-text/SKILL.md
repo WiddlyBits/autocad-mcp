@@ -4,6 +4,7 @@ description: >-
   Place, resize, or reflow text inside the ECSI title block on SMID panel drawings.
   Load before touching any TITLE-layer MTEXT: when fitting a title, updating a
   revision number, or diagnosing text that appears outside the title block border.
+---
 
 # Title block text — placing and fitting
 

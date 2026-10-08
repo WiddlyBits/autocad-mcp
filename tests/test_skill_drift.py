@@ -11,6 +11,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS = ROOT / "skills"
 LISP_DIR = ROOT / "lisp-code"
@@ -89,3 +91,15 @@ def test_known_absent_operations_are_still_absent():
     ops = _dispatched_ops()
     present = sorted((t, o) for t, o in KNOWN_ABSENT if o in ops.get(t, set()))
     assert not present, f"documented as nonexistent but now dispatched: {present}"
+
+
+@pytest.mark.parametrize("skill_md", sorted(SKILLS.glob("*/SKILL.md")), ids=lambda p: p.parent.name)
+def test_skill_frontmatter_is_closed_and_complete(skill_md):
+    """claude.ai rejects the upload without a closing ---; bb06517 dropped it from title-block-text."""
+    lines = skill_md.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "---", "SKILL.md must open with ---"
+    assert "---" in lines[1:], "frontmatter has no closing ---"
+    front = lines[1:lines.index("---", 1)]
+    keys = {ln.split(":", 1)[0] for ln in front if ln and not ln[0].isspace() and ":" in ln}
+    assert {"name", "description"} <= keys, f"frontmatter keys: {sorted(keys)}"
+    assert f"name: {skill_md.parent.name}" in front, "name must match the skill folder"
