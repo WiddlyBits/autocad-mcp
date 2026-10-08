@@ -62,8 +62,11 @@ upstream  https://github.com/puran-water/autocad-mcp.git  <- author's repo, pull
 here, never in a loaded copy: editing a loaded copy is how a skill once documented a
 `preflight` block and an `mcp_select.lsp` that existed only on an unmerged branch.
 
-`skills/** text eol=lf` (`.gitattributes`), so the loaded copies are byte-identical to the
-repo and a plain recursive diff is a valid drift check.
+`skills/** text eol=lf` (`.gitattributes`), so loaded copies are byte-identical to the repo
+**except `SKILL.md` frontmatter**: claude.ai rewrites it on upload (the folded
+`description: >-` comes back as a one-line plain or single-quoted value). A plain recursive
+diff therefore always flags `SKILL.md`. `-Check` compares `name`/`description` as values and
+the body after the closing `---` byte for byte; every other file is hashed.
 
 ```
 powershell -File scripts\sync-skills.ps1           # copy to ~/.claude/skills/synced/<guid>_<guid>/ (local preview)
@@ -74,8 +77,10 @@ powershell -File scripts\sync-skills.ps1 -Package  # dist\<skill>.zip for the cl
 Run `-Check` at the start of any AutoCAD session that edits skills. The synced folder is a
 **local preview**: the next claude.ai sync round overwrites it, so it is not delivery. Delivery
 is Gianni uploading the `-Package` zips in claude.ai → Customize → Skills after a merge to
-`main`; `-Check` afterwards must list all three in the manifest with `updatedAt` at or after
-the last commit touching `skills/`.
+`main`; `-Check` afterwards must exit 0 with all three in the manifest. Content is the
+evidence: an `updatedAt` older than that skill's own last commit (`skills/<name>`, not
+`skills/`) prints `warn`, not `DRIFT` — an upload built from the same content just before the
+commit is delivered. `-SyncedRoot <dir>` points `-Check` at a scratch copy for testing.
 
 `tests/test_skill_drift.py` fails CI when a skill names an `mcp:`/`c:` LISP function or a
 `tool(operation=…)` that does not exist in `src/` or `lisp-code/`.
