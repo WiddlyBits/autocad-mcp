@@ -6,18 +6,6 @@ UNTESTED.
 
 ## Open
 
-**`vlax-` guard: premise untested, and bypassable.** `execute_lisp` rejects any inline code
-containing `vlax-` on LT (`backends/file_ipc.py`, `execute_lisp`), citing a dispatch-loop hang.
-The hang has never been reproduced; the only live evidence (2026-09-05) is `vla-put-Width`
-working on LT 2027, which uses `vla-` and never matched the guard. It is also a substring test on
-the inline string only, so `(load "x.lsp")` with `vlax-` in the file walks past it.
-Decide with one live test on a throwaway drawing after `system(init)`: write
-`(vl-load-com)(princ (vla-get-Name (vla-get-ActiveDocument (vlax-get-acad-object))))` to
-`C:/temp/vlax_probe.lsp`, then `execute_lisp('(load "C:/temp/vlax_probe.lsp")')` with a 30 s
-timeout. Name returned → narrow or remove the guard, add a test. Hang → Esc, `system(init)`;
-the guard stays but must scan loaded files or be documented as advisory, and the vlax patterns
-in `activex-and-lisp-limits.md` are cut.
-
 **`entity(get)` on an erased handle raises instead of reporting not-found.** `handent` returns
 an ename for an erased entity and `mcp-cmd-entity-get` (`mcp_dispatch.lsp`) only tests
 `(not ent)`, so `entget` is nil and the `strcat` fails: `bad argument type: stringp nil`
@@ -45,6 +33,8 @@ the tab. Use it only when the target is model space; a paper-space rebuild must 
 
 - `entmakex` is unsupported for non-graphical objects (XRECORD and other named objects) in LT;
   graphical MTEXT works (title-block rebuild, 2026-09-09).
+- `vlax-get-acad-object` and `vla-get-ActiveDocument` work through `execute_lisp`: the probe
+  returned `"Drawing1.dwg"` with no hang (2026-10-08), so the server-side `vlax-` guard was removed.
 - `vl-file-sizep` and `pcacdb_plotter_list` do not exist (2026-09-18). Use `(findfile …)` for existence.
 - `acaddoc.lsp` does not autoload, even on the support path with `SECURELOAD=0`; the APPLOAD
   Startup Suite does.

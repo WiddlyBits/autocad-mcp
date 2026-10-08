@@ -10,7 +10,7 @@ request file to a temp directory, AutoCAD's LISP dispatcher picks it up, execute
 and writes a JSON result file back. Errors originate at four points:
 
 - **Python-dispatch** — before any file is written; AutoCAD is unreachable or the request cannot
-  be safely sent (AutoCAD busy, or `vlax-` code on LT).
+  be safely sent (AutoCAD busy).
 - **Python-verify** — after the LISP layer returned `ok:true`; a post-hoc check finds the side
   effect (a file write) did not land.
 - **LISP-dispatch** — inside the dispatcher, before the command runs.
@@ -39,7 +39,6 @@ whether a geometry-creating command committed a partial result before timing out
 | `timeout_not_dispatched` | Yes | The server already re-sent once; check focus / `(mcp:whoami)` first. |
 | `timeout_mutating` | **Never blindly** | May have been applied; inspect drawing state first. |
 | `save_unverified` | **Never blindly** | Inspect the file and `drawing(info)` before re-saving. |
-| `vlax_not_supported_in_lt` | **Never** | Same payload always fails; rewrite without `vlax-`. |
 
 This mirrors the IMessageFilter pattern in COM-based AutoCAD automation: retrying rejected or
 busy calls is safe; retrying calls that may have committed is not.
@@ -123,15 +122,6 @@ and has no automatic rollback.
 | **Trigger** | After `drawing(save, path)`, `save_as_dxf` or `plot_pdf` returns `ok:true`, the target's `(mtime, size)` is unchanged from before the call, or the file does not exist. |
 | **Payload** | `detail`: `"file not found"` or `"timestamp unchanged"`; `path` |
 | **Notes** | Comparing the file's own before/after state (not `time.time()`) is what lets a newly created file pass — AutoCAD stamps `.dwg` mtime to the whole second. A SAVEAS may have targeted another document; check `DWGNAME` before concluding the save is lost. |
-
-### `vlax_not_supported_in_lt`
-
-| Field | Value |
-|---|---|
-| **Origin** | Python-dispatch |
-| **Trigger** | `execute_lisp` code contains the substring `vlax-` while `is_lt` is true. |
-| **Payload** | `pattern: "vlax-*"` |
-| **Notes** | The guard's stated reason is a dispatch-loop hang, which has never been reproduced live, and it inspects only the inline code — `(load "x.lsp")` with `vlax-` inside the file is not caught. See `known-issues.md`. |
 
 ### `wrong_doc`
 

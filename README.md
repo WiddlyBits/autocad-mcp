@@ -223,7 +223,7 @@ AutoLISP was added to AutoCAD LT in the **2024 release (Windows only)**. AutoCAD
 | Supported (LT 2024+ Windows) | Not Supported |
 |-------------------------------|---------------|
 | `.lsp` / `.fas` / `.vlx` / `.dcl` | VLIDE (Visual LISP IDE) |
-| All `vl-*` utility functions | `vlax-*` (ActiveX/COM) |
+| All `vl-*` utility functions, and `vlax-get-acad-object` (LT 2027, measured 2026-10-08) | Full `vlax-*` (ActiveX/COM) is not documented for LT |
 | File I/O (`open`, `read-line`, etc.) | Express Tools |
 | Entity access (`entget`, `entmod`, etc.) | 3D operations |
 | Selection sets | AutoLISP on Mac |

@@ -23,8 +23,6 @@ Exact signatures — match these without re-reading the LSP files:
   the scan: the `-in` form with a specific layer, or a tighter region.
 - **sel-dump truncation** — `"truncated":true` when count > `*mcp-max-selection*` (200).
   Re-select a tighter set.
-- **`vlax_not_supported_in_lt`** — the server refused code containing `vlax-` on LT before
-  sending it. Rewrite without `vlax-*` (`(command ...)` or a `.scr`); re-sending fails the same way.
 - **`timeout_mutating`**, `may_have_applied: true` — may have run. Check state before re-sending.
 
 ## Symptoms

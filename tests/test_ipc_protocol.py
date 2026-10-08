@@ -825,3 +825,17 @@ class TestPreBatchDocCheck:
                     backend._ipc_dir = Path(tmpdir)
                     await backend.execute_lisp("(+ 1 2)", expected_doc="target.dwg")
         mock_assert.assert_called_once_with("target.dwg")
+
+    @pytest.mark.asyncio
+    async def test_execute_lisp_dispatches_vlax_on_lt(self):
+        """vlax- code on LT is dispatched, not refused (live-verified 2026-10-08)."""
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend.is_lt = True
+        cmd_result = CommandResult(ok=True, payload="Drawing1.dwg")
+        with patch.object(backend, "_dispatch", new_callable=AsyncMock, return_value=cmd_result) as mock_dispatch:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                backend._ipc_dir = Path(tmpdir)
+                result = await backend.execute_lisp("(vlax-get-acad-object)")
+        assert result.ok is True
+        mock_dispatch.assert_called_once()

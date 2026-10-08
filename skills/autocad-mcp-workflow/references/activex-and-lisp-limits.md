@@ -126,12 +126,9 @@ than reporting a missing entity. Test `(null (entget e))` to tell erased from li
 
 ## Working AutoLISP patterns
 
-**Blocked by the server guard on LT (UNTESTED whether LT actually hangs).** `execute_lisp`
-refuses any code containing `vlax-` when the backend detects LT (`vlax_not_supported_in_lt`,
-`file_ipc.py`). The three layer/model-space patterns below and the `vla-open` duplicate further
-down all need `vlax-get-acad-object` or `vlax-for`, so on LT they come back refused, not run.
-`vla-*` calls alone pass the guard. A live test decides whether the guard or these patterns go —
-see `docs/known-issues.md`.
+**`vlax-get-acad-object` works on LT 2027** (2026-10-08: returned the document name through
+`execute_lisp`, no hang), so the server no longer refuses `vlax-` code. Only that entry point
+was measured — `vlax-for` and `vla-Delete` in the patterns below are not yet field-proven.
 
 **Unlock all locked layers before a mass delete** (a locked layer will fail
 `vla-Delete` with "Automation Error. On locked layer"):

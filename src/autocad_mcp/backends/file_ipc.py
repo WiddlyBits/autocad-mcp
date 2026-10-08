@@ -147,7 +147,7 @@ class FileIPCBackend(AutoCADBackend):
                 ),
             )
 
-        # Detect AutoCAD LT vs full AutoCAD to guard vlax- calls
+        # Detect AutoCAD LT vs full AutoCAD (logged; nothing branches on it)
         prog_result = await self.execute_lisp('(getvar "PROGRAM")')
         if prog_result.ok and isinstance(prog_result.payload, str):
             self.is_lt = prog_result.payload.strip().lower() == "acadlt"
@@ -517,15 +517,9 @@ class FileIPCBackend(AutoCADBackend):
         File persists for session; cleaned up by _cleanup_stale_files().
         expected_doc: when provided, assert_doc() runs before the IPC file is written.
         """
-        # vlax-* functions are only available in full AutoCAD, not LT.
-        # Dispatching a vlax- call on LT causes a dispatch loop hang, so we
-        # reject it here before any file is written.
-        if self.is_lt and "vlax-" in code:
-            return CommandResult(
-                ok=False,
-                error="vlax_not_supported_in_lt",
-                payload={"pattern": "vlax-*"},
-            )
+        # No vlax- guard: on LT 2027 (2026-10-08) vlax-get-acad-object through
+        # this path returned the document name without hanging. Inline code is
+        # loaded from a temp file exactly like (load "x.lsp"), so both are covered.
         request_id = uuid.uuid4().hex[:12]
         code_file = self._ipc_dir / f"autocad_mcp_lisp_{request_id}.lsp"
         code_file.write_text(code, encoding="utf-8")
