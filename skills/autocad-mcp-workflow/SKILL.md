@@ -3,7 +3,7 @@ name: autocad-mcp-workflow
 description: >-
   Align text, batch LISP, DXF probe, selection handoff, screenshot planning, or
   troubleshoot autocad-mcp (tools named mcp__autocad-mcp__ system, drawing,
-  entity, layer, view, block, annotation, pid). Load before any mcp__autocad-mcp__ call
+  entity, layer, view, block, annotation). Load before any mcp__autocad-mcp__ call
   and whenever the user refers to a selection ("the lines I have selected", "move these
   circles", "duplicate these labels") — grip selection does not survive the MCP link and
   Rule 1 is how it gets handed over.
