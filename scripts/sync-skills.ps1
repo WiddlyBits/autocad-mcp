@@ -4,10 +4,11 @@
 
 .DESCRIPTION
   The canonical copy of these skills is here, in git, next to the MCP server
-  they document. The live copy lives under a session-scoped AppData path whose
-  GUIDs the app owns and can re-provision:
+  they document. The live copies live under paths whose GUIDs the app owns
+  and can re-provision:
 
     %APPDATA%\Claude\local-agent-mode-sessions\skills-plugin\<guid>\<guid>\skills\
+    ~\.claude\skills\synced\<guid>_<guid>\        (only dirs holding manifest.json)
 
   That directory is a deployment target, not a source. Editing it in place is
   how the skill drifted ahead of the code on 2026-08-22: it documented a

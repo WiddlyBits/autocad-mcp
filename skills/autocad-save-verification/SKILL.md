@@ -1,10 +1,12 @@
 ---
 name: autocad-save-verification
 description: >-
-  Save .dwg in place, SAVEAS to a new path, DXFOUT/DXF export, drawing open/close,
-  or verify that any write actually landed. Load before any save, export, or
-  file-identity-critical step — including when drawing(save), drawing(save_as_dxf),
-  QSAVE, SAVEAS, or DXFOUT returns ok and that ok is about to be believed.
+  Save .dwg in place, SAVEAS to a new path, create a .dwg from a .dwt template,
+  plot_pdf, DXFOUT/DXF export, drawing open/close, or verify that any write
+  actually landed. Load before any save, plot, export, template, or
+  file-identity-critical step — including when drawing(save), drawing(plot_pdf),
+  drawing(save_as_dxf), QSAVE, SAVEAS, or DXFOUT returns ok and that ok is about
+  to be believed, and before the final save after plotting.
 ---
 
 # Knowing a write actually landed
@@ -39,23 +41,22 @@ basename (it worked) or the old one (it did not).
 
 ### Creating a drawing from a `.dwt`
 
-Measured 2026-10-08 (three DO drawings built from one template): with the `.dwt` active,
-`drawing(save, data={"path": "….dwg"})` returned `ok:false` (errno 4), wrote nothing, and
-left the template active. Plain `execute_lisp` worked three times out of three:
+SAVEAS's first answer is the file format, and `""` keeps the current one. From an open
+`.dwt` that format is Template, so on 2026-10-08 `drawing(save, path="….dwg")` returned `ok:false`
+(errno 4) and wrote nothing, while a hand SAVEAS passing `"2018"` worked 3/3.
+`drawing(save, path)` now passes `"2018"` itself whenever `DWGNAME` ends in `.dwt`. A
+`.dwg` still passes `""`, so an older drawing is never upgraded behind your back.
 
-```
-(command "_.SAVEAS" "2018" "C:/path/New Name.dwg")   ; then (getvar "DWGNAME")
-```
-
-Do the SAVEAS **before any edit** so the template can never take the changes, then
-confirm `DWGNAME` is the new name and the file exists on disk. This run did not go through
-`mcp:verify-write`; the evidence was `DWGNAME`, the file's size and mtime, and an
-unchanged template mtime. Repeat the same SAVEAS from the template tab for each new drawing.
+Do the SAVEAS **before any edit** so the template can never take the changes. Then call
+`(mcp:whoami)`: it should name the new file, and the template's mtime should be unchanged.
+Repeat from the template tab for each new drawing.
 
 ### Plot first, save last
 
 `drawing(plot_pdf)` leaves `DBMOD` above 0 (5 observed, on a drawing that had just been
-saved). Order the end of a build as **plot, then `drawing(save)`, then confirm `DBMOD` is 0**;
+saved). The cause is the handler's own viewport-layer entmod. The payload now reports
+`dbmod_before`/`dbmod_after`, plus `dbmod_restored` when `acad-push-dbmod` exists to undo the
+change. A `hint` appears whenever the plot left the drawing dirty. Order the end of a build as **plot, then `drawing(save)`, then confirm `DBMOD` is 0**;
 plotting after the save leaves the file clean on disk but the document dirty, and any later
 edit-then-replot needs a save again.
 
@@ -64,6 +65,7 @@ edit-then-replot needs a save again.
 ```
 (mcp:verify-write "C:/temp/x.dxf" (list "_.DXFOUT" "C:/temp/x.dxf" "16"))
 (mcp:verify-write "C:/t/a.dwg"    (list "_.SAVEAS" "" "C:/t/a.dwg" "_Y"))
+(mcp:verify-write "C:/t/b.dwg"    (list "_.SAVEAS" "2018" "C:/t/b.dwg" "_Y"))  ; from a .dwt
 ```
 
 It stashes `FILEDIA`, forces it to 0 so the command takes its path from the argument list

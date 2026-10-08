@@ -14,7 +14,7 @@ uv run pytest -q
 
 Expected counts are branch-dependent — **123 on `fix-dev-dependency-group`, 134 on
 `screenshot-token-cost-controls`, 614 on `visual-cost-ladder`, 690 on
-`selection-driven-editing`, 736 on `main`**. A count below the branch's expected number is a
+`selection-driven-editing`, 736 on `main`, 752 on `do-draft2-fixes`**. A count below the branch's expected number is a
 real failure. Re-measure and update this line whenever a commit changes the count — a stale
 number here turns a real failure into one that reads as normal.
 
@@ -55,28 +55,23 @@ upstream  https://github.com/puran-water/autocad-mcp.git  <- author's repo, pull
 
 ## Skills
 
-`skills/` is the canonical copy of the AutoCAD skills — `autocad-mcp-workflow` and
-`autocad-save-verification` — versioned next to the server they document. Deploy them with
+`skills/` is the canonical copy of the AutoCAD skills — `autocad-mcp-workflow`,
+`autocad-save-verification`, and `title-block-text` — versioned next to the server they
+document. Deploy them with
 
 ```
 powershell -File scripts/sync-skills.ps1        # -WhatIf to preview
 ```
 
-which globs the session GUIDs under
-`%APPDATA%\Claude\local-agent-mode-sessions\skills-plugin\*\*\skills` rather than
+which globs the GUIDs under both
+`%APPDATA%\Claude\local-agent-mode-sessions\skills-plugin\*\*\skills` and
+`~\.claude\skills\synced\<guid>_<guid>\` (only dirs holding a `manifest.json`) rather than
 hardcoding them, because those are exactly what the app re-provisions.
 
 **Edit here, not there.** The AppData copy is a deployment target. Editing it in place is
 how the skill came to document a `preflight` block and an `mcp_select.lsp` that existed
 only on an unmerged branch — a divergence nothing could catch while one half was outside
 version control. That gap closed when `selection-driven-editing` landed on 2026-08-25.
-
-### Skill selection
-
-| Trigger | Load this skill |
-|---|---|
-| Any `mcp__autocad-mcp__*` call; editing a .dwg; selection handoff; LISP batching; DXF probe; screenshot planning; troubleshooting the MCP connection | `autocad-mcp-workflow` |
-| Saving/saving-as a .dwg; DXFOUT; `drawing(save_as_dxf)`; opening/closing a drawing; any write that must be verified | `autocad-save-verification` |
 
 ### LISP / probe error contracts
 
@@ -87,16 +82,6 @@ Exact payload signatures — match these without re-reading the LSP files:
 - **Probe truncation** — `"truncated":true,"truncated_reason":"max_entities"|"time"`. Fix: switch to the `-in` form with a specific layer or tighter region.
 - **sel-dump truncation** — `"truncated":true` in the sel-dump payload (count > `*mcp-max-selection*` = 200). Re-select a tighter set.
 - **Long inline LISP breaks JSON** — any `execute_lisp` body with nested double-quotes beyond 2 levels, or longer than ~400 bytes, must be written to a temp `.lsp` file and loaded via `(load "path")` — never inlined. Inlining at that size breaks JSON envelope parsing, not just costs round-trips.
-
-## Drawing switches
-
-Before issuing any batch of commands to a target drawing, call `system(get_active_document)` first
-and confirm it matches the target. If it doesn't match, resolve focus **once** before the batch —
-not per command inside it.
-
-The current guard-and-retry pattern fires `mcp:guard` correctly but generates 20–24 WRONG-DOC
-round-trips per session when focus drifts. A single pre-check before the batch eliminates those
-retries entirely.
 
 ## Screenshot cost controls
 

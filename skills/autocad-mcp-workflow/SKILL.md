@@ -1,8 +1,8 @@
 ---
 name: autocad-mcp-workflow
 description: >-
-  Align text, batch LISP, DXF probe, selection handoff, save verification, screenshot
-  planning, or troubleshoot autocad-mcp (tools named mcp__autocad-mcp__ system, drawing,
+  Align text, batch LISP, DXF probe, selection handoff, screenshot planning, or
+  troubleshoot autocad-mcp (tools named mcp__autocad-mcp__ system, drawing,
   entity, layer, view, block, annotation, pid). Load before any mcp__autocad-mcp__ call
   and whenever the user refers to a selection ("the lines I have selected", "move these
   circles", "duplicate these labels") — grip selection does not survive the MCP link and
@@ -11,7 +11,8 @@ description: >-
 
 # Working in AutoCAD LT via autocad-mcp
 
-**Every `execute_lisp` is one API request at roughly 108 K cache-read tokens.** That is
+**Every `execute_lisp` is one API request that re-reads the whole current context** (60–114 K
+cache-read measured across the four DO Draft 2 sessions). That is
 the cost that dominates this workflow — not screenshots. Round-trip count is the lever;
 each rule below exists to remove round trips or to remove the mistakes that cause them.
 (For the measurements behind that, see `references/why-this-skill-exists.md`.)
@@ -121,14 +122,12 @@ re-move with a slightly different offset leaves a drawing that is not the one yo
 with.
 
 `vla-Add`/`vla-Open` do not reliably transfer real UI focus even when
-`vla-get-ActiveDocument` says they did, and **a bare `{"ok":true}` from save or open is not
-evidence** — `drawing(save)` has returned ok while the underlying SAVEAS failed and the
-original document stayed active. Follow either with `drawing(info)`, or use
-`(mcp:verify-write path cmdlist)`, which runs the write and reports whether the bytes on
-disk actually moved. Do not settle for the caught error: DXFOUT aimed at a directory that
-does not exist returns `no-error` and writes nothing. The whole procedure — which of
-`drawing(save)` / `save_as_dxf` / `SAVEAS` to reach for, and how each one fails — is in the
-`autocad-save-verification` skill.
+`vla-get-ActiveDocument` says they did.
+
+**Load the `autocad-save-verification` skill before any save, SAVEAS, `plot_pdf`, DXF export,
+or new drawing from a `.dwt`.** Those writes can report ok and still not land, and that
+skill is the procedure for checking them. In DO Draft 2 it never loaded, and the
+template SAVEAS was worked out by hand instead.
 
 ## Rule 3: climb the capture ladder
 
@@ -139,7 +138,7 @@ genuinely cannot answer.
 | Rung | Call | Answers | Cost |
 |---|---|---|---|
 | L0 | `system(status)` preflight | which document, space, libraries | ~80 tok |
-| L0 | `(mcp:whoami)` | which file, which tab, unsaved changes | ~80 tok |
+| L0 | `(mcp:whoami)` | which file, which tab, unsaved changes — **the** identity probe (not `mcp:sys-snapshot`) | ~80 tok |
 | L0 | `drawing(info)`, `entity(count)` | did the edit apply | ~50 tok |
 | L1 | `(mcp:sel-dump)`, `entity(get)` | what is selected; where is it; what does it say | ~100–400 tok |
 | L2 | `(mcp:bbox-by-layer-in "Model")` | what occupies which region | ~200–600 tok |
@@ -159,6 +158,8 @@ answer enters the conversation:
 python -m autocad_mcp.probe_dxf out.dxf                 # the grid snapshot
 python -m autocad_mcp.probe_dxf out.dxf --text          # every string, with layer and point
 python -m autocad_mcp.probe_dxf out.dxf --spaces        # the layout names
+python -m autocad_mcp.probe_dxf out.dxf --text --space Layout1 --layer TITLE
+                                    # title-block read-back: handle, height, MTEXT width + attach
 ```
 
 Run it from `~/autocad-mcp` under `uv run`. `--space` reads a layout instead of model space,
@@ -185,8 +186,8 @@ it, or compute the window from entity coordinates.
 ## Rule 4: batch, and stop at phase boundaries
 
 Several sequential command-line operations belong in **one** `.scr` run via
-`(command "_.SCRIPT" "C:/temp/batch.scr")`, not one `execute_lisp` each — at ~108 K per
-round trip that is the difference between one request and fifteen. See
+`(command "_.SCRIPT" "C:/temp/batch.scr")`, not one `execute_lisp` each. Each round trip
+costs about the current context size, so this is the difference between one request and fifteen. See
 `references/activex-and-lisp-limits.md`.
 
 When a phase is confirmed complete (cleanup → template → layout → detailing), suggest the

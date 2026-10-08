@@ -60,6 +60,10 @@ faster and equally reliable within a session, just not across sessions.
 
 ## Rule 2: title block cell geometry (hardcoded — do not re-probe)
 
+**Scope:** every coordinate in this skill is for the **11x17 SMID panel tab**. The 36x24 DO
+sheets use `Layout1` and different cells. Those values are in the `ecsi-do-three-drawings-inventory`
+memory, so do not reuse the numbers below there.
+
 **Paper space tab:** `11x17` (`tilemode=0`)  
 **Layer:** `TITLE`  
 **Attachment on content MTEXTs:** top-center (DXF group 71 = 2) for the two wide content
@@ -182,9 +186,22 @@ default h=0.100 fits up to 3 lines without adjustment.
 After the entmod, climb the ladder before reaching for pixels:
 
 1. `entity(get)` on the handle — confirms the new group 40 value was written
-2. `(mcp:sel-show)` — zooms to the entity; if the bbox no longer extends to x≈17.7 the
+2. **Read every title-block string at once with no LISP:** `drawing(save_as_dxf)`, then
+   `uv run python -m autocad_mcp.probe_dxf out.dxf --text --space <tab> --layer TITLE`
+   (from `~/autocad-mcp`). That gives handle, insert, height, and for MTEXT the wrap width
+   and attach point, all at ~0 context. Use it instead of `mcp:text-dump-in`, which has no
+   handle or width. In DO Draft 2 this read-back took 22 calls and two hand-LISP errors.
+3. `(mcp:sel-show)` — zooms to the entity; if the bbox no longer extends to x≈17.7 the
    overflow is gone
-3. Only if you need visual confirmation of layout: `view(get_screenshot, region=[l,t,r,b])`
+4. **Fit check from the plot, not a screenshot.** After `drawing(plot_pdf)`, open the PDF with
+   pymupdf and compare `page.get_text("words")` boxes against the cell rectangle. Work out
+   the scale from the PDF instead of assuming one. `plot_pdf` plots the LIMMIN–LIMMAX
+   window with Fit + Center onto ARCH D. So with `W, H` as the limits size and `pw, ph` as
+   `page.rect` size: `s = min(pw/W, ph/H)`, `ox = (pw − W·s)/2`, `oy = (ph − H·s)/2`.
+   A drawing point then maps to `(ox + (x − LIMMIN.x)·s, ph − oy − (y − LIMMIN.y)·s)`,
+   because the PDF's y axis points down. Any word box outside the mapped cell is an overflow.
+   This costs no images, and the PDF is the deliverable anyway.
+5. Only if you need visual confirmation of layout: `view(get_screenshot, region=[l,t,r,b])`
    cropped to the title block area (roughly screen pixels for x=[title-block-left, border-right],
    y=[title-block-top, bottom]) — saves ~1000 tokens vs a full window capture
 
