@@ -68,8 +68,13 @@ edit-then-replot needs a save again.
 It forces `FILEDIA` to 0 so the command takes its path from the argument list instead of
 stopping on a dialog nobody can see, runs it under `vl-catch-all-apply`, restores `FILEDIA`
 to **what it was**, and reports `ok` from whether the file on disk moved —
-`existed_before`, `exists_after`, `mtime_before`, `mtime_after`, `size`, `cmdactive`,
-`dbmod`, and any caught `error`. Requires `system(operation="init")`.
+`existed_before`, `exists_after`, `retargeted`, `mtime_before`, `mtime_after`, `size`,
+`cmdactive`, `dbmod`, and any caught `error`. Requires `system(operation="init")`.
+
+`mtime_after` is `""` after a SAVEAS that landed: `vl-file-systime` returns nil for the file
+AutoCAD now holds open (LT 2027, 2026-10-08). That is expected, not a failure — existence comes
+from `findfile` and `retargeted` from `DWGNAME`. The one case it cannot see is a SAVEAS over the
+document's own path at the same size; use `drawing(save)` and `DBMOD` → 0 for that.
 
 The server's own check behind `save_unverified` compares the file's `(mtime, size)` before
 and after, so a newly created file counts. (AutoCAD stamps `.dwg` mtime to the whole

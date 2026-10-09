@@ -43,8 +43,9 @@ Loaded by `system(operation="init")`. Rationale in Rule 1 of the main skill; thi
   LWPOLYLINE `vertices`/`closed`. Capped at `*mcp-max-selection*` (200).
 - `(mcp:sel-show)` — zooms to the set's bbox, then highlights it. Costs no tokens.
 - `(mcp:by-handles lst)` — handle list to selection set, skipping erased handles.
-- `(mcp:guard dwg tab)` / `(mcp:wrong-doc dwg tab)` — `dwg` matches as a **suffix**, `tab`
-  matches `CTAB`; `nil` or `""` skips that check.
+- `(mcp:guard dwg tab)` / `(mcp:wrong-doc dwg tab)` — `dwg` matches as a **suffix** of
+  `DWGNAME`, with or without the extension (`"DI-02"` and `"DI-02.dwg"` both match `DI-02.dwg`);
+  `tab` matches `CTAB`; `nil` or `""` skips that check.
 - `(mcp:undo-begin label)` / `(mcp:undo-end)` — one named UNDO group around a hand-written edit.
 - `(mcp:reactor-init)` — registers the command reactor if this AutoCAD has one. Returns
   `NO-REACTORS` / `REGISTERED` / `ALREADY-REGISTERED` / `FAILED`. **UNTESTED on LT 2027**

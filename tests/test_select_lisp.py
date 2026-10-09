@@ -341,4 +341,41 @@ class TestVerifyWrite:
 
     def test_a_missing_file_afterwards_is_never_a_pass(self):
         body = defun_body(source(SELECT_LSP), "mcp:verify-write")
-        assert "((null after) nil)" in body
+        assert "((not exists) nil)" in body
+
+    def test_existence_comes_from_findfile_not_the_timestamp(self):
+        """vl-file-systime returns nil for a file AutoCAD holds open, and a
+        SAVEAS that landed leaves its target open. Measured 2026-10-08: a real
+        SAVEAS reported exists_after:false with size 562187."""
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert "(setq exists (if (findfile path) T nil))" in body
+        assert '\\"exists_after\\":" (if exists' in body
+
+    def test_mtimes_only_count_when_both_were_readable(self):
+        """A nil mtime after (the file is now open) against a real one before
+        is not evidence of a change."""
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert "((and before after (not (equal before after))) T)" in body
+
+    def test_a_saveas_that_retargets_counts(self):
+        """An overwrite SAVEAS of a same-size file leaves no readable mtime and
+        no size change. DWGNAME moving to the target is the evidence left."""
+        body = defun_body(source(SELECT_LSP), "mcp:verify-write")
+        assert "(retargeted T)" in body
+        assert "(mcp:norm-path path)" in body
+        assert '\\"retargeted\\":' in body
+
+
+class TestGuard:
+    """The suffix the skill tells callers to pass is the bare drawing name."""
+
+    def test_matches_with_and_without_the_extension(self):
+        """Measured 2026-10-08: (mcp:guard "Drawing1" "Model") refused on
+        Drawing1.dwg, so every documented call refused."""
+        body = defun_body(source(SELECT_LSP), "mcp:guard")
+        assert "(mcp:ends-with name dwg)" in body
+        assert "(mcp:ends-with (vl-filename-base name) dwg)" in body
+
+    def test_suffix_compare_is_case_insensitive(self):
+        body = defun_body(source(SELECT_LSP), "mcp:ends-with")
+        assert body.count("(strcase") == 2

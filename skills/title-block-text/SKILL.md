@@ -14,13 +14,13 @@ project and listed in Rule 2.
 ## Rule 0: preflight and guard per the workflow skill
 
 `init` and `mcp:guard` work exactly as in `autocad-mcp-workflow` Rules 0 and 2. The only
-title-block specific is the suffix: the guard matches the right end of `DWGNAME`, including
-`.dwg` and any `_recover`.
+title-block specific is the suffix: the guard matches the right end of `DWGNAME`, with or
+without `.dwg` — but a `_recover` copy has to be named, since `"AI-01 Draft 1"` does not match it.
 
 | Drawing | Guard suffix to pass |
 |---|---|
-| `SMID Well 8 AI-01 Draft 1.dwg` | `"AI-01 Draft 1.dwg"` |
-| `SMID Well 8 AI-01 Draft 1_recover.dwg` | `"AI-01 Draft 1_recover.dwg"` |
+| `SMID Well 8 AI-01 Draft 1.dwg` | `"AI-01 Draft 1"` |
+| `SMID Well 8 AI-01 Draft 1_recover.dwg` | `"AI-01 Draft 1_recover"` |
 
 A `WRONG-DOC` response returns `actual_dwg` — copy its right portion to form the suffix.
 

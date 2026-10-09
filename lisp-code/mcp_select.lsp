@@ -383,12 +383,25 @@
 ;; Guarding - refuse rather than edit the wrong thing
 ;; -----------------------------------------------------------------------
 
+(defun mcp:ends-with (s suffix)
+  "T when s ends in suffix, case-insensitively."
+  (and (>= (strlen s) (strlen suffix))
+       (= (strcase suffix)
+          (strcase (substr s (- (strlen s) (strlen suffix) -1)))))
+)
+
 (defun mcp:guard (dwg tab / name)
   "T when the active document and space are the ones named, nil otherwise.
 
    dwg matches as a SUFFIX, because that is how these drawings get referred to
    - \"the one ending in DI-02\" - and requiring the whole path means a caller
    has to know a path it was never told.
+
+   The suffix is tried against DWGNAME with and without its extension, so
+   \"DI-02\" and \"DI-02.dwg\" both match DI-02.dwg. Comparing against the
+   full name only meant every documented call refused (measured 2026-10-08:
+   (mcp:guard \"Drawing1\" \"Model\") -> WRONG-DOC on Drawing1.dwg). It
+   still refuses DI-02_recover.dwg, which is the point.
 
    nil or \"\" for either argument means \"do not check this one\", which is
    the honest answer when a caller genuinely does not care. Passing that
@@ -398,9 +411,8 @@
   (and
     (or (null dwg)
         (= dwg "")
-        (and (>= (strlen name) (strlen dwg))
-             (= (strcase dwg)
-                (strcase (substr name (- (strlen name) (strlen dwg) -1))))))
+        (mcp:ends-with name dwg)
+        (mcp:ends-with (vl-filename-base name) dwg))
     (or (null tab) (= tab "") (= (strcase tab) (strcase (getvar "CTAB"))))
   )
 )
@@ -743,8 +755,20 @@
   out
 )
 
-(defun mcp:verify-write (path cmdlist / fd existed before before-size
-                                        r err after after-size changed out)
+(defun mcp:norm-path (p)
+  "p uppercased with every slash turned into a backslash, so the forward-slash
+   path a caller passes compares equal to DWGPREFIX's backslash form."
+  (strcase (vl-string-translate "/" "\\" p))
+)
+
+(defun mcp:doc-path ()
+  "The active document's full path, normalised by mcp:norm-path."
+  (mcp:norm-path (strcat (getvar "DWGPREFIX") (getvar "DWGNAME")))
+)
+
+(defun mcp:verify-write (path cmdlist / fd existed before before-size doc-before
+                                        r err exists after after-size retargeted
+                                        changed out)
   "Run a file-writing command and report whether the file actually moved.
 
    cmdlist is the argument list for vl-cmdf, so the caller writes the command
@@ -770,25 +794,39 @@
    Size is compared as well as mtime: a rewrite fast enough to land inside the
    same second is invisible to the timestamp alone. When both are identical
    this reports changed:false, which is the conservative answer rather than
-   the confident wrong one."
+   the confident wrong one.
+
+   Existence comes from findfile, never from the timestamp. vl-file-systime
+   returns nil for a file AutoCAD holds open (measured 2026-10-08 on LT 2027:
+   nil for the active vlax-scratch.dwg, while vl-file-size gave 562187 and
+   findfile found it) - and a successful SAVEAS always leaves its target as
+   the open document. Reading existence off the mtime reported every SAVEAS
+   that landed as exists_after:false. mtimes therefore only count when both
+   were readable, and a SAVEAS that retargets the active document to path
+   counts on its own, since the open file's mtime is unreadable by then."
   (mcp:begin-output)
   (setq existed (if (findfile path) T nil))
   (setq before (vl-file-systime path))
   (setq before-size (vl-file-size path))
+  (setq doc-before (mcp:doc-path))
   (setq fd (getvar "FILEDIA"))
   (setvar "FILEDIA" 0)
   (setq r (vl-catch-all-apply 'vl-cmdf cmdlist))
   (vl-cmdf)
   (setvar "FILEDIA" fd)
   (setq err (if (vl-catch-all-error-p r) (vl-catch-all-error-message r) nil))
+  (setq exists (if (findfile path) T nil))
   (setq after (vl-file-systime path))
   (setq after-size (vl-file-size path))
+  (setq retargeted (and (= (mcp:doc-path) (mcp:norm-path path))
+                        (/= doc-before (mcp:norm-path path))))
   (setq changed
     (cond
-      ((null after) nil)
+      ((not exists) nil)
       ((not existed) T)
-      ((not (equal before after)) T)
+      ((and before after (not (equal before after))) T)
       ((and before-size after-size (/= before-size after-size)) T)
+      (retargeted T)
       (T nil)
     )
   )
@@ -797,7 +835,8 @@
                     ",\"path\":\"" (mcp:esc path) "\""
                     ",\"changed\":" (if changed "true" "false")
                     ",\"existed_before\":" (if existed "true" "false")
-                    ",\"exists_after\":" (if after "true" "false")
+                    ",\"exists_after\":" (if exists "true" "false")
+                    ",\"retargeted\":" (if retargeted "true" "false")
                     ",\"mtime_before\":\"" (mcp:systime-str before) "\""
                     ",\"mtime_after\":\"" (mcp:systime-str after) "\""
                     ",\"size\":" (if after-size (itoa after-size) "-1")
