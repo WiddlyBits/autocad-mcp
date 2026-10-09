@@ -101,11 +101,18 @@ than reporting a missing entity. Test `(null (entget e))` to tell erased from li
 ## Working AutoLISP patterns
 
 **`vlax-get-acad-object` works on LT 2027** (2026-10-08: returned the document name through
-`execute_lisp`, no hang), so the server no longer refuses `vlax-` code. Only that entry point
-was measured — `vlax-for` and `vla-Delete` in the patterns below are not yet field-proven.
+`execute_lisp`, no hang), so the server no longer refuses `vlax-` code. Field-proven on LT 2027
+the same day, all through `execute_lisp` on a scratch drawing:
+- `vlax-for` over Layers: 4 entries = `vla-get-Count` = `layer(list)`; per-layer `ssget`
+  counts summed to `entity_count` (20).
+- `vla-Delete`: 4 lines in model space, one on a locked layer. Without the unlock it raised
+  the error below and the entity stayed live; after the unlock pattern, the delete pattern
+  reported `deleted=4` and model space counted 0.
+- `vla-open`: opened the copy (`FullName` returned, Documents 2 → 3), focus did not move.
+  `vla-Add` likewise created `Drawing2.dwg` without moving focus.
 
 **Unlock all locked layers before a mass delete** (a locked layer will fail
-`vla-Delete` with "Automation Error. On locked layer"):
+`vla-Delete` with "Automation Error. On locked layer" — measured 2026-10-08):
 ```lisp
 (setq doc (vla-get-ActiveDocument (vlax-get-acad-object)))
 (setq layers (vla-get-Layers doc))
@@ -179,4 +186,6 @@ Copy-Item "source.dwg" "destination.dwg"
 ```lisp
 (vla-open (vla-get-Documents (vlax-get-acad-object)) "C:/path/destination.dwg")
 ```
-`vla-open` does not reliably move focus (Rule 2) — `(mcp:whoami)` before editing.
+`vla-open` does not reliably move focus (Rule 2; 2026-10-08 it opened the file and focus
+stayed on the source) — `(mcp:whoami)` before editing, and expect to ask Gianni to click the
+new tab.
