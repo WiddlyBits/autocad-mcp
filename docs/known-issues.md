@@ -6,11 +6,6 @@ UNTESTED.
 
 ## Open
 
-**`entity(get)` on an erased handle raises instead of reporting not-found.** `handent` returns
-an ename for an erased entity and `mcp-cmd-entity-get` (`mcp_dispatch.lsp`) only tests
-`(not ent)`, so `entget` is nil and the `strcat` fails: `bad argument type: stringp nil`
-(field-verified 2026-09-18). `mcp-cmd-entity-erase` already tests `(entget ent)`; get should too.
-
 **`command_active` never fires for IPC calls.** The dispatcher checks `CMDNAMES`
 (`mcp_dispatch.lsp`, `mcp-dispatch-command`), but from the dispatch context it reads `""` even
 while the user has `LINE` waiting for input (2026-09-18: `create_line` during an active `LINE`

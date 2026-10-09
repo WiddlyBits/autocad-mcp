@@ -171,3 +171,16 @@ class TestLispDoesNotDivergeFromTheProbes:
     def test_probes_also_treat_group_50_as_radians(self):
         probes = (DISPATCH_LSP.parent / "mcp_probes.lsp").read_text(encoding="utf-8")
         assert "(/ (* 180.0 (mcp:group data 50 0.0)) pi)" in probes
+
+
+class TestErasedHandleIsNotFound:
+    """handent returns an ename for an erased entity, so `(not ent)` alone lets
+    it through and entget's nil reaches strcat: `bad argument type: stringp nil`
+    (field-verified 2026-09-18). Both verbs that take a handle must test entget."""
+
+    @pytest.mark.parametrize("defun", ["mcp-cmd-entity-get", "mcp-cmd-entity-erase"])
+    def test_existence_check_tests_entget(self, defun):
+        body = strip_lisp(
+            _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), defun)
+        )
+        assert "(and ent (entget ent))" in body

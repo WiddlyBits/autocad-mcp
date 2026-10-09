@@ -1192,7 +1192,8 @@
     (setq ent (entlast))
     (setq ent (handent entity-id))
   )
-  (if (not ent)
+  ;; handent hands back an ename for an erased entity; only entget says it is gone.
+  (if (not (and ent (entget ent)))
     (cons nil (strcat "Entity not found: " entity-id))
     (progn
       (setq ent-data (entget ent))

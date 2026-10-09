@@ -40,7 +40,8 @@ Exact signatures — match these without re-reading the LSP files:
 | `no function definition: MCP:WHOAMI` (or any `mcp:` verb) on a document just opened or switched to | `init` loaded the libraries into the *previous* document only | `system(operation="init")` once on this document. Nothing ran — safe to re-send |
 | `execute_lisp` payload is an opaque `<<ccr:…,262B>>` | result replaced by a reference in transit; nothing here resolves it (seen once, 2026-10-08) | Re-ask for less: `(list (getvar "DWGNAME") (getvar "DWGPREFIX") (getvar "DBMOD"))` |
 | `drawing(operation="save_as")` → "Unknown drawing operation" | that operation doesn't exist | `drawing(operation="save", data={"path": …})` |
-| `entity(get)` returns `bad argument type: stringp nil` | the handle was erased (`handent` still returns an ename; `entget` is nil) | treat as "gone"; confirm with a `drawing(info)` count diff |
+| `entity(get)` returns `Entity not found: <h>` | the handle never existed or was erased | treat as "gone"; confirm with a `drawing(info)` count diff |
+| `entity(get)` returns `bad argument type: stringp nil` | the handle was erased and the document holds a `mcp_dispatch.lsp` from before 2026-10-08 | same as above; reopen the drawing so the Startup Suite loads the current dispatcher |
 | `entity(count)` on a layer you just "deleted" isn't zero, or a purge removes more/less than expected | `CLAYER` or a nested block definition | `activex-and-lisp-limits.md` |
 | A probe answers plausibly but with the behaviour you just fixed | old definitions still resident | `system(operation="init")` re-loads probes and select; `mcp_dispatch.lsp` needs APPLOAD or a restart |
 | The same write fails twice | something structural, not flakiness | stop; the `autocad-save-verification` skill's diagnosis order |
