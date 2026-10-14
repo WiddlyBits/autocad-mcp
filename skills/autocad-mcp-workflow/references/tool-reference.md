@@ -5,7 +5,10 @@ parameters. This file holds only what those don't:
 
 - **system** — `init` (re)loads `mcp_probes.lsp` + `mcp_select.lsp` into the *current*
   document; `status` returns `backend` and the `preflight` block (Rule 0). `execute_lisp`
-  takes `data.code`.
+  takes `data.code`. `command_line` (`data.n`, default 10, max 200) reads the last n history
+  lines, the live prompt and `document` (window-title name) over UI Automation, ~0.5 s. It is
+  read-only, works while a command waits and on a fresh server. `options_hidden: true` means the
+  prompt's `[...]` options could not be recovered; it does not read dialogs or palettes.
 - **drawing** — there is **no** `save_as`; use `save` with `data.path`. `info` returns
   extents `{min,max}` (null when empty) — the cheap verification call. `open` mostly cannot
   switch documents on the AutoCAD backend.

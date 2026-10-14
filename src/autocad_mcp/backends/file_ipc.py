@@ -136,6 +136,16 @@ class FileIPCBackend(AutoCADBackend):
             # Old dispatchers reply with a bare "pong" and no version.
             payload = result.payload
             self._dispatcher_version = payload.get("dispatcher", 1) if isinstance(payload, dict) else 1
+        if not result.ok and "command_active" in (result.error or ""):
+            # The dispatcher answered, so it is loaded; it refuses while a command runs.
+            return CommandResult(
+                ok=False,
+                error=(
+                    "command_active: AutoCAD has a command running, so the dispatcher refused the ping "
+                    "(it is loaded). Cancel the active command (Esc) or read the prompt with "
+                    "system(operation='command_line')."
+                ),
+            )
         if not result.ok:
             lisp_path = str(LISP_DIR / "mcp_dispatch.lsp").replace("\\", "/")
             return CommandResult(

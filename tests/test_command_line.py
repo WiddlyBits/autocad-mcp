@@ -74,6 +74,22 @@ class TestRead:
             r = asyncio.run(cl.read_command_line(5, 1))
         assert r.ok and r.payload["lines"] == ["h2"]
 
+    def test_payload_names_the_document_from_the_title_bar(self):
+        class P:
+            returncode = 0
+            async def communicate(self):
+                return json.dumps({"history": "h", "live": ["Command: "]}).encode(), b""
+        fake = type("W", (), {"GetWindowText": staticmethod(
+            lambda h: "Autodesk AutoCAD LT 2027  - [C:\jobs\Panel A.dwg]")})
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=P())),              patch.dict("sys.modules", {"win32gui": fake}):
+            r = asyncio.run(cl.read_command_line(5, 1))
+        assert r.payload["document"] == "Panel A.dwg"
+
+    def test_document_is_none_without_a_dwg_title(self):
+        fake = type("W", (), {"GetWindowText": staticmethod(lambda h: "Autodesk AutoCAD LT 2027")})
+        with patch.dict("sys.modules", {"win32gui": fake}):
+            assert cl.window_document(5) is None
+
 
 class TestBackend:
     def test_base_backend_says_unsupported(self):
@@ -119,3 +135,21 @@ class TestHiddenOptions:
     def test_flagged_when_not_in_scrollback(self):
         out = self._parse("Command: LINE")
         assert out["options_hidden"] is True
+
+
+class TestInitializeCommandActive:
+    def _init(self, error):
+        b = FileIPCBackend()
+        b._dispatch = AsyncMock(return_value=CommandResult(ok=False, error=error))
+        with patch("autocad_mcp.backends.file_ipc.find_autocad_window", return_value=7),              patch.object(b, "_find_command_line_hwnd", return_value=None),              patch.object(b, "_cleanup_stale_files"):
+            return asyncio.run(b.initialize())
+
+    def test_command_active_is_not_reported_as_not_loaded(self):
+        r = self._init('{"error":"command_active","active":"LINE"}')
+        assert not r.ok
+        assert "command_active" in r.error and "Esc" in r.error and "command_line" in r.error
+        assert "not loaded" not in r.error
+
+    def test_a_silent_dispatcher_still_says_not_loaded(self):
+        r = self._init("timeout")
+        assert "mcp_dispatch.lsp not loaded" in r.error

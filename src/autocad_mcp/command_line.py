@@ -88,6 +88,22 @@ def parse_output(raw: str, n: int) -> dict:
     return out
 
 
+def window_document(hwnd: int) -> str | None:
+    """Document name from the AutoCAD title bar, e.g. 'Drawing1.dwg'.
+
+    The dispatcher's status/preflight is refused while a command waits, so the
+    title is the only cheap way to know which document the prompt belongs to.
+    """
+    try:
+        import win32gui
+
+        title = win32gui.GetWindowText(hwnd)
+    except Exception:
+        return None
+    m = re.search(r"([^\\/\[\]]+\.dwg)", title, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
 async def read_command_line(hwnd: int | None, n: int = DEFAULT_LINES) -> CommandResult:
     if sys.platform != "win32":
         return CommandResult(ok=False, error="command_line needs Windows UI Automation")
@@ -112,4 +128,5 @@ async def read_command_line(hwnd: int | None, n: int = DEFAULT_LINES) -> Command
         payload = parse_output(out.decode("utf-8", "replace").strip(), n)
     except (ValueError, AttributeError) as exc:
         return CommandResult(ok=False, error=f"command_line_unparsable: {exc}")
+    payload["document"] = window_document(hwnd)
     return CommandResult(ok=True, payload=payload)
