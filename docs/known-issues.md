@@ -6,12 +6,6 @@ UNTESTED.
 
 ## Open
 
-**`command_active` never fires for IPC calls.** The dispatcher checks `CMDNAMES`
-(`mcp_dispatch.lsp`, `mcp-dispatch-command`), but from the dispatch context it reads `""` even
-while the user has `LINE` waiting for input (2026-09-18: `create_line` during an active `LINE`
-returned ok and may have fed its points to the user's command). Python's `autocad_busy`
-(`IsQuiescent`) is the real protection.
-
 **Entity edit payloads are bare strings.** `move`/`rotate`/`scale` return `"moved"` etc. with
 no handle, type or layer; `erase` returns `"erased <h>"`. Callers must confirm with
 `entity(get)` or `drawing(info)`. The handle is only read from top-level `entity_id`;

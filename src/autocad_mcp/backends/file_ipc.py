@@ -586,6 +586,18 @@ class FileIPCBackend(AutoCADBackend):
             forms.append(f'(if (findfile "{path}") (load "{path}"))')
         return "".join(forms)
 
+    async def command_line(self, n: int = 10) -> CommandResult:
+        """Read-only view of the command line via UI Automation.
+
+        Bypasses the dispatcher on purpose: it refuses every call while a
+        command is waiting for input, which is exactly when this is wanted.
+        """
+        from autocad_mcp.command_line import read_command_line
+
+        if not self._hwnd:
+            self._reacquire_hwnd()
+        return await read_command_line(self._hwnd, n)
+
     async def load_libraries(self) -> CommandResult:
         """Load the helper libraries, then report what is live.
 

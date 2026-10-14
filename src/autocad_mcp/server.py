@@ -619,6 +619,10 @@ async def system(
                       it is the fix for edited-on-disk .lsp files whose old
                       definitions stay resident and answer plausibly.
       execute_lisp  — Execute arbitrary AutoLISP code (File IPC only). data: {code}
+      command_line  — Read-only: last n command-line history lines plus the live
+                      prompt row. Works while a command is waiting for input,
+                      when every dispatcher-routed read is refused. data: {n?}
+                      (default 10, max 200). File IPC on Windows only.
       assert_doc    — Verify the active drawing matches expected name before a batch.
                       data: {expected: "<filename>"}. Returns ok:true when names match,
                       ok:false / error:"wrong_doc" when they differ (actual name in payload).
@@ -679,6 +683,20 @@ async def system(
             return _json({"error": "data.code is required"})
         result = await backend.execute_lisp(data["code"])
         return await add_screenshot_if_available(result, include_screenshot)
+    elif operation == "command_line":
+        # Not get_backend(): first init pings the dispatcher, and the ping is
+        # refused while a command waits, so a fresh server could never read the
+        # prompt it exists to read.
+        from autocad_mcp import client
+        from autocad_mcp.backends.file_ipc import find_autocad_window
+        from autocad_mcp.command_line import read_command_line
+
+        n = int(data.get("n", 10))
+        if client._backend is not None:
+            result = await client._backend.command_line(n)
+        else:
+            result = await read_command_line(find_autocad_window(), n)
+        return _json(result.to_dict())
     elif operation == "assert_doc":
         backend = await get_backend()
         expected = data.get("expected")

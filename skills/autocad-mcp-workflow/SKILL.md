@@ -130,6 +130,7 @@ genuinely cannot answer.
 | L0 | `system(status)` preflight | which backend, document, space, libraries | ~80 tok |
 | L0 | `(mcp:whoami)` | which file, folder, tab, unsaved changes — **the** identity probe | ~80 tok |
 | L0 | `drawing(info)`, `entity(count)` | did the edit apply | ~50 tok |
+| L0 | `system(command_line, data={"n": 10})` | what AutoCAD is asking now plus recent history; works while a command waits, when the dispatcher refuses reads. Before asking Gianni to paste the command line | ~100–300 tok |
 | L1 | `(mcp:sel-dump)`, `entity(get)` | what is selected; where is it; what does it say | ~100–400 tok |
 | L2 | `(mcp:bbox-by-layer-in "Model")` | what occupies which region | ~200–600 tok |
 | L3 | `(mcp:grid-map-in 24 16 "Model")` | does the layout read correctly, coarse | ~300–800 tok |
