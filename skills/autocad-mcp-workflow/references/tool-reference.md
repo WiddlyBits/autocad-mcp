@@ -8,10 +8,14 @@ parameters. This file holds only what those don't:
   takes `data.code`. `command_line` (`data.n`, default 10, max 200) reads the last n history
   lines, the live prompt and `document` (window-title name) over UI Automation, ~0.5 s. It is
   read-only, works while a command waits and on a fresh server. `options_hidden: true` means the
-  prompt's `[...]` options could not be recovered; it does not read dialogs or palettes.
+  prompt's `[...]` options could not be recovered (`option_count` then says how many there are); it
+  does not read dialogs or palettes, and a modeless palette such as LAYER leaves the prompt idle. `status` and
+  `init` carry `dispatcher: {version, stale}` (stale = `mcp_dispatch.lsp` edited after it was loaded), and
+  `command_line` / `status` add a `multi_window` block when more than one AutoCAD window is open.
 - **drawing** — there is **no** `save_as`; use `save` with `data.path`. `info` returns
   extents `{min,max}` (null when empty) — the cheap verification call. `open` mostly cannot
-  switch documents on the AutoCAD backend.
+  switch documents on the AutoCAD backend. `purge` reports `removed` plus before/after table counts; `undo` is
+  `verified:true` only when entities or layer state changed (over 5000 entities it says `verified:false`).
 - **entity** — pass the handle as top-level `entity_id`, not `data.handle`. `list` has no
   coordinates and no paging: filter by `layer`. `move`/`rotate`/`scale` return a bare string
   (`"moved"`), so confirm with `entity(get)` or `drawing(info)`.
