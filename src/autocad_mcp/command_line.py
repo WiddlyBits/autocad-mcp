@@ -47,8 +47,15 @@ $live = @()
 if ($cli) {
   $txt = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
   foreach ($t in $cli.FindAll($TS::Descendants, $txt)) { $live += $t.Current.Name }
+  # Option keywords are Buttons with no Name, HelpText or AutomationId; the
+  # CLI chrome buttons (Close, Customize, Recent Commands) have a HelpText.
+  $btn = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+  foreach ($b in $cli.FindAll($TS::Descendants, $btn)) {
+    $c = $b.Current
+    if (-not $c.Name -and -not $c.HelpText -and -not $c.AutomationId -and $c.ClassName -eq 'Button') { $nopts++ }
+  }
 }
-@{ found_history = [bool]$e; found_palette = [bool]$cli; history = $history; live = $live } | ConvertTo-Json -Compress
+@{ found_history = [bool]$e; found_palette = [bool]$cli; history = $history; live = $live; option_buttons = [int]$nopts } | ConvertTo-Json -Compress
 """
 
 
@@ -85,6 +92,10 @@ def parse_output(raw: str, n: int) -> dict:
                 out["prompt"] = prompt.replace("[]", r.group(1), 1)
                 return out
         out["options_hidden"] = True
+        # The names are unreadable but the count is not: measured 2026-10-15,
+        # -LAYER showed 21 unnamed buttons for its 21 keywords, TEXT showed 2.
+        if data.get("option_buttons"):
+            out["option_count"] = int(data["option_buttons"])
     return out
 
 
@@ -129,4 +140,9 @@ async def read_command_line(hwnd: int | None, n: int = DEFAULT_LINES) -> Command
     except (ValueError, AttributeError) as exc:
         return CommandResult(ok=False, error=f"command_line_unparsable: {exc}")
     payload["document"] = window_document(hwnd)
+    from autocad_mcp.backends.file_ipc import multi_window_warning
+
+    warning = multi_window_warning(hwnd)
+    if warning:
+        payload["multi_window"] = warning
     return CommandResult(ok=True, payload=payload)

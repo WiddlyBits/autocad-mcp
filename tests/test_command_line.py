@@ -81,7 +81,9 @@ class TestRead:
                 return json.dumps({"history": "h", "live": ["Command: "]}).encode(), b""
         fake = type("W", (), {"GetWindowText": staticmethod(
             lambda h: "Autodesk AutoCAD LT 2027  - [C:\jobs\Panel A.dwg]")})
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=P())),              patch.dict("sys.modules", {"win32gui": fake}):
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=P())), \
+             patch.dict("sys.modules", {"win32gui": fake}), \
+             patch("autocad_mcp.backends.file_ipc.list_autocad_windows", return_value=[]):
             r = asyncio.run(cl.read_command_line(5, 1))
         assert r.payload["document"] == "Panel A.dwg"
 
@@ -131,6 +133,11 @@ class TestHiddenOptions:
     def test_options_recovered_from_scrollback(self):
         out = self._parse("Specify first point:\nSpecify next point or [Undo]: (c:mcp-dispatch)")
         assert "[Undo]" in out["prompt"] and "options_hidden" not in out
+
+    def test_hidden_options_report_the_button_count(self):
+        raw = json.dumps({"history": "Command: TEXT", "live": self.LIVE, "option_buttons": 2})
+        out = cl.parse_output(raw, 5)
+        assert out["options_hidden"] is True and out["option_count"] == 2
 
     def test_flagged_when_not_in_scrollback(self):
         out = self._parse("Command: LINE")
