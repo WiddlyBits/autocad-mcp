@@ -21,6 +21,12 @@
 ;; run_<id> before dispatching (file_ipc.py gates timeout_not_dispatched on it).
 (setq *mcp-dispatcher-version* 2)
 
+;; When this copy was loaded, as DATE (local Julian day). Reported by ping so
+;; Python can compare it with the file's mtime: an .lsp edited on disk after
+;; this moment means the resident definitions are stale. The version int above
+;; cannot say that, because nobody bumps it for every edit.
+(setq *mcp-dispatcher-loaded* (getvar "DATE"))
+
 ;; -----------------------------------------------------------------------
 ;; JSON-like output helpers (minimal, no external library)
 ;; -----------------------------------------------------------------------
@@ -225,7 +231,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result path filedia dxf-before dxf-after doc-before doc-after dbmod)
+(defun mcp-dispatch-command (cmd-name params-json / result path filedia dxf-before dxf-after doc-before doc-after dbmod purge-before purge-after undo-before undo-after)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (if (not (= "" (getvar "CMDNAMES")))
     (cons nil (strcat "{\"error\":\"command_active\",\"active\":\""
@@ -233,7 +239,8 @@
     (cond
     ;; --- Ping ---
     ((= cmd-name "ping")
-     (cons T (strcat "{\"pong\":true,\"dispatcher\":" (itoa *mcp-dispatcher-version*) "}")))
+     (cons T (strcat "{\"pong\":true,\"dispatcher\":" (itoa *mcp-dispatcher-version*)
+                  ",\"loaded\":" (rtos *mcp-dispatcher-loaded* 2 8) "}")))
 
     ;; --- Freehand LISP execution ---
     ((= cmd-name "execute-lisp")
@@ -241,7 +248,23 @@
 
     ;; --- Undo / Redo ---
     ((= cmd-name "undo")
-     (command "_.UNDO" "1") (cons T "\"undone\""))
+     (progn
+       (setq undo-before (mcp-world-snapshot))
+       (command "_.UNDO" "1")
+       (setq undo-after (mcp-world-snapshot))
+       (cond
+         ((not (nth 2 undo-before))
+          ;; Too many entities to hold for comparison. Say so rather than guess.
+          (cons T (strcat "{\"undone\":true,\"verified\":false,\"entities\":"
+                          (itoa (car undo-after)) "}")))
+         ((equal undo-before undo-after)
+          (cons nil (strcat "UNDO changed nothing: the " (itoa (car undo-after))
+                            " entities and every layer's state are identical to before."
+                            " There was nothing to undo, or the last step changed something"
+                            " this check does not read (a view, a variable, a block table).")))
+         (T (cons T (strcat "{\"undone\":true,\"verified\":true,\"entities_before\":"
+                            (itoa (car undo-before)) ",\"entities_after\":"
+                            (itoa (car undo-after)) "}"))))))
 
     ((= cmd-name "redo")
      (cons nil "Redo is not available through MCP dispatch — the dispatch command clears the redo stack"))
@@ -516,8 +539,16 @@
          (cons nil "Save path required"))))
 
     ((= cmd-name "drawing-purge")
-     (command "_.-PURGE" "_ALL" "*" "_N")
-     (cons T "\"purged\""))
+     (progn
+       (setq purge-before (mcp-purge-counts))
+       (command "_.-PURGE" "_ALL" "*" "_N")
+       (setq purge-after (mcp-purge-counts))
+       ;; Zero removed is a true answer for a clean drawing, so it is still ok;
+       ;; the counts are what let the caller tell it from a purge that never ran.
+       (cons T (strcat "{\"purged\":true,\"removed\":"
+                       (itoa (- (apply '+ purge-before) (apply '+ purge-after)))
+                       ",\"before\":" (mcp-counts-json purge-before)
+                       ",\"after\":" (mcp-counts-json purge-after) "}"))))
 
     ((= cmd-name "drawing-open")
      (progn
@@ -941,7 +972,52 @@
   )
 )
 
-(defun mcp-cmd-entity-move (params / entity-id dx dy ent)
+;; --- Measured results -------------------------------------------------------
+;; (command ...) returns nothing whether the command worked or was refused, so a
+;; verb that reports success after it has measured nothing. These helpers take
+;; the before/after readings the verbs below compare.
+
+(defun mcp-table-count (tbl / n e)
+  "Entries in a symbol table: LAYER, BLOCK, LTYPE, STYLE, DIMSTYLE."
+  (setq n 0)
+  (setq e (tblnext tbl T))
+  (while e (setq n (1+ n)) (setq e (tblnext tbl)))
+  n
+)
+
+(defun mcp-purge-counts ()
+  (list (mcp-table-count "LAYER") (mcp-table-count "BLOCK") (mcp-table-count "LTYPE")
+        (mcp-table-count "STYLE") (mcp-table-count "DIMSTYLE"))
+)
+
+(defun mcp-counts-json (c)
+  (strcat "{\"layers\":" (itoa (nth 0 c)) ",\"blocks\":" (itoa (nth 1 c))
+          ",\"linetypes\":" (itoa (nth 2 c)) ",\"text_styles\":" (itoa (nth 3 c))
+          ",\"dim_styles\":" (itoa (nth 4 c)) "}")
+)
+
+(defun mcp-world-snapshot (/ ss n i out e)
+  "(entity-count data-or-nil verifiable) across both spaces plus every layer's
+   state. Above 5000 entities the data is dropped: holding every entget at
+   once is not free, and the caller is told it cannot compare."
+  (setq ss (ssget "_X"))
+  (setq n (if ss (sslength ss) 0))
+  (if (> n 5000)
+    (list n nil nil)
+    (progn
+      (setq i 0 out nil)
+      (while (< i n) (setq out (cons (entget (ssname ss i)) out)) (setq i (1+ i)))
+      (setq e (tblnext "LAYER" T))
+      (while e (setq out (cons e out)) (setq e (tblnext "LAYER")))
+      (list n out T)))
+)
+
+(defun mcp-entity-changed (ent before)
+  "True when ENT's entity data differs from BEFORE (nil if it was erased)."
+  (not (equal before (if (entget ent) (entget ent))))
+)
+
+(defun mcp-cmd-entity-move (params / entity-id dx dy ent before)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq dx (mcp-json-get-number params "dx"))
   (setq dy (mcp-json-get-number params "dy"))
@@ -951,8 +1027,11 @@
   )
   (if ent
     (progn
+      (setq before (entget ent))
       (command "_.MOVE" ent "" '(0 0 0) (list dx dy 0))
-      (cons T "\"moved\""))
+      (if (or (and (= dx 0.0) (= dy 0.0)) (mcp-entity-changed ent before))
+        (cons T "\"moved\"")
+        (cons nil "MOVE left the entity unchanged. It was not moved.")))
     (cons nil "Entity not found")
   )
 )
@@ -1282,26 +1361,36 @@
   )
 )
 
-(defun mcp-cmd-entity-rotate (params / entity-id cx cy angle ent)
+(defun mcp-cmd-entity-rotate (params / entity-id cx cy angle ent before)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq angle (mcp-json-get-number params "angle"))
   (if (= entity-id "last") (setq ent (entlast)) (setq ent (handent entity-id)))
   (if ent
-    (progn (command "_.ROTATE" ent "" (list cx cy 0) angle) (cons T "\"rotated\""))
+    (progn
+      (setq before (entget ent))
+      (command "_.ROTATE" ent "" (list cx cy 0) angle)
+      (if (or (= angle 0.0) (mcp-entity-changed ent before))
+        (cons T "\"rotated\"")
+        (cons nil "ROTATE left the entity unchanged. It was not rotated.")))
     (cons nil "Entity not found")
   )
 )
 
-(defun mcp-cmd-entity-scale (params / entity-id cx cy factor ent)
+(defun mcp-cmd-entity-scale (params / entity-id cx cy factor ent before)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq factor (mcp-json-get-number params "factor"))
   (if (= entity-id "last") (setq ent (entlast)) (setq ent (handent entity-id)))
   (if ent
-    (progn (command "_.SCALE" ent "" (list cx cy 0) factor) (cons T "\"scaled\""))
+    (progn
+      (setq before (entget ent))
+      (command "_.SCALE" ent "" (list cx cy 0) factor)
+      (if (or (= factor 1.0) (mcp-entity-changed ent before))
+        (cons T "\"scaled\"")
+        (cons nil "SCALE left the entity unchanged. It was not scaled.")))
     (cons nil "Entity not found")
   )
 )
@@ -1350,7 +1439,7 @@
   )
 )
 
-(defun mcp-cmd-entity-fillet (params / id1 id2 radius ent1 ent2)
+(defun mcp-cmd-entity-fillet (params / id1 id2 radius ent1 ent2 b1 b2 last-before err)
   (setq id1 (mcp-json-get-string params "id1"))
   (setq id2 (mcp-json-get-string params "id2"))
   (setq radius (mcp-json-get-number params "radius"))
@@ -1358,14 +1447,28 @@
   (setq ent2 (handent id2))
   (if (and ent1 ent2)
     (progn
+      (setq b1 (entget ent1) b2 (entget ent2) last-before (entlast))
       (command "_.FILLET" "_R" radius)
-      (command "_.FILLET" ent1 ent2)
-      (cons T "\"filleted\""))
+      ;; A refused FILLET ("radius is too large") raises from inside (command ...),
+      ;; and the dispatcher turns that into ok:false with an empty message. Catch it
+      ;; so the verb can say what happened, then clear what it left at the prompt.
+      (setq err (vl-catch-all-apply 'vl-cmdf (list "_.FILLET" ent1 ent2)))
+      (command)
+      ;; A fillet trims or extends the two entities and, for a radius above 0,
+      ;; adds an arc: either one moving is proof it ran.
+      (if (or (mcp-entity-changed ent1 b1) (mcp-entity-changed ent2 b2)
+              (not (equal last-before (entlast))))
+        (cons T "\"filleted\"")
+        (cons nil (strcat "FILLET changed neither entity and added nothing: a radius too large for the segments,"
+                          " or lines that cannot meet, are refused."
+                          (if (and (vl-catch-all-error-p err) (vl-catch-all-error-message err))
+                            (strcat " AutoCAD said: " (vl-catch-all-error-message err))
+                            "")))))
     (cons nil "One or both entities not found")
   )
 )
 
-(defun mcp-cmd-entity-chamfer (params / id1 id2 dist1 dist2 ent1 ent2)
+(defun mcp-cmd-entity-chamfer (params / id1 id2 dist1 dist2 ent1 ent2 b1 b2 last-before err)
   (setq id1 (mcp-json-get-string params "id1"))
   (setq id2 (mcp-json-get-string params "id2"))
   (setq dist1 (mcp-json-get-number params "dist1"))
@@ -1374,9 +1477,21 @@
   (setq ent2 (handent id2))
   (if (and ent1 ent2)
     (progn
+      (setq b1 (entget ent1) b2 (entget ent2) last-before (entlast))
       (command "_.CHAMFER" "_D" dist1 dist2)
-      (command "_.CHAMFER" ent1 ent2)
-      (cons T "\"chamfered\""))
+      ;; A refused CHAMFER ("radius is too large") raises from inside (command ...),
+      ;; and the dispatcher turns that into ok:false with an empty message. Catch it
+      ;; so the verb can say what happened, then clear what it left at the prompt.
+      (setq err (vl-catch-all-apply 'vl-cmdf (list "_.CHAMFER" ent1 ent2)))
+      (command)
+      (if (or (mcp-entity-changed ent1 b1) (mcp-entity-changed ent2 b2)
+              (not (equal last-before (entlast))))
+        (cons T "\"chamfered\"")
+        (cons nil (strcat "CHAMFER changed neither entity and added nothing: distances too large for the segments,"
+                          " or lines that cannot meet, are refused."
+                          (if (and (vl-catch-all-error-p err) (vl-catch-all-error-message err))
+                            (strcat " AutoCAD said: " (vl-catch-all-error-message err))
+                            "")))))
     (cons nil "One or both entities not found")
   )
 )

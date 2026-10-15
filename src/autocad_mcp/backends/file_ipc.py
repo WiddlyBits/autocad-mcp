@@ -50,26 +50,56 @@ _MUTATING_COMMANDS: frozenset[str] = frozenset({
 })
 
 
-def find_autocad_window() -> int | None:
-    """Find the AutoCAD LT window handle by checking window titles."""
+def list_autocad_windows() -> list[tuple[int, str]]:
+    """Every visible AutoCAD window as (hwnd, title), in Z-order (front first)."""
     if sys.platform != "win32":
-        return None
+        return []
     try:
         import win32gui
 
-        windows: list[int] = []
+        windows: list[tuple[int, str]] = []
 
         def callback(hwnd, result):
             if win32gui.IsWindowVisible(hwnd):
-                text = win32gui.GetWindowText(hwnd).lower()
+                title = win32gui.GetWindowText(hwnd)
+                text = title.lower()
                 if "autocad" in text and ("drawing" in text or ".dwg" in text):
-                    result.append(hwnd)
+                    result.append((hwnd, title))
             return True
 
         win32gui.EnumWindows(callback, windows)
-        return windows[0] if windows else None
+        return windows
     except ImportError:
+        return []
+
+
+def find_autocad_window() -> int | None:
+    """Find the AutoCAD LT window handle by checking window titles.
+
+    With several windows open this returns the front one, which is not
+    necessarily the one a cached handle points at; see multi_window_warning.
+    """
+    windows = list_autocad_windows()
+    return windows[0][0] if windows else None
+
+
+def multi_window_warning(hwnd: int | None) -> dict | None:
+    """Warn when more than one AutoCAD window is open, naming the one in use.
+
+    Measured 2026-10-15: with Drawing1 and Drawing2 in separate windows, a
+    server holding Drawing1's handle read Drawing1 while a fresh server picked
+    Drawing2. Neither is wrong, but nothing said another window existed.
+    """
+    windows = list_autocad_windows()
+    if len(windows) < 2:
         return None
+    return {
+        "count": len(windows),
+        "using": next((t for h, t in windows if h == hwnd), None),
+        "windows": [t for _, t in windows],
+        "note": "More than one AutoCAD window is open. This call acts on 'using', which may not be the "
+        "window you are working in. Close the others, or confirm with the document name.",
+    }
 
 
 class FileIPCBackend(AutoCADBackend):
@@ -86,6 +116,37 @@ class FileIPCBackend(AutoCADBackend):
         # Set from the ping reply. >= 2 means LISP claims cmd files by renaming
         # them before dispatch, so a timeout can tell "never started" apart.
         self._dispatcher_version: int = 1
+        # DATE (local Julian day) at which the resident dispatcher was loaded;
+        # None for dispatchers that predate the field.
+        self._dispatcher_loaded: float | None = None
+
+    def dispatcher_freshness(self) -> dict:
+        """Is the resident dispatcher older than mcp_dispatch.lsp on disk?
+
+        stale is True/False, or None when the dispatcher cannot say (loaded
+        before it reported a load time, or the file is unreadable). The
+        hand-bumped version int cannot answer this: it only moves when
+        someone remembers to move it.
+        """
+        from datetime import datetime
+
+        info: dict = {"version": self._dispatcher_version, "stale": None}
+        if self._dispatcher_loaded is None:
+            info["note"] = "unknown: this dispatcher predates the load-time field. Reload it once (APPLOAD or restart)."
+            return info
+        try:
+            mtime = datetime.fromtimestamp((LISP_DIR / "mcp_dispatch.lsp").stat().st_mtime)
+        except OSError:
+            info["note"] = "unknown: mcp_dispatch.lsp not readable on disk."
+            return info
+        # AutoCAD's DATE counts days from local midnight (fraction 0.386 is
+        # 09:16), so 1970-01-01 is 2440588.0, not the astronomical 2440587.5.
+        # Measured live 2026-10-15: DATE 2461329.386 at 09:16 local.
+        disk = 2440588.0 +(mtime - datetime(1970, 1, 1)).total_seconds() / 86400
+        info["stale"] = disk > self._dispatcher_loaded + 1 / 86400
+        if info["stale"]:
+            info["note"] = "stale: mcp_dispatch.lsp changed on disk after it was loaded. Reload it (APPLOAD or restart AutoCAD)."
+        return info
 
     @property
     def name(self) -> str:
@@ -136,6 +197,8 @@ class FileIPCBackend(AutoCADBackend):
             # Old dispatchers reply with a bare "pong" and no version.
             payload = result.payload
             self._dispatcher_version = payload.get("dispatcher", 1) if isinstance(payload, dict) else 1
+            loaded = payload.get("loaded") if isinstance(payload, dict) else None
+            self._dispatcher_loaded = float(loaded) if isinstance(loaded, (int, float)) else None
         if not result.ok and "command_active" in (result.error or ""):
             # The dispatcher answered, so it is loaded; it refuses while a command runs.
             return CommandResult(
@@ -182,6 +245,10 @@ class FileIPCBackend(AutoCADBackend):
             info["mcp_status"] = self._status_file.read_text(encoding="utf-8").strip()
         except OSError:
             info["mcp_status"] = "unknown"
+        info["dispatcher"] = self.dispatcher_freshness()
+        warning = multi_window_warning(self._hwnd)
+        if warning:
+            info["multi_window"] = warning
         return CommandResult(ok=True, payload=info)
 
     # --- IPC dispatch ---
