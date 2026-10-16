@@ -89,8 +89,13 @@ verb or hand-written — must begin with the guard:**
   ))
 ```
 
-When the user genuinely must click a tab, give the whole sequence up front rather than one
-round trip per tab.
+**To change drawings, use `system(switch_doc, data={"dwg": "<exact tab title>"})`** instead
+of asking for a click. It sends no keystrokes, works with Start in front, re-initializes the
+backend, and is ok only when `DWGNAME` matches. Ctrl+Tab is no substitute: on Start a
+Chromium widget holds focus and swallows it. Ask for a click only when `switch_doc` fails, and
+then give the whole sequence up front rather than one round trip per tab. After any open or
+switch, confirm with `(mcp:whoami)` — or `(list (getvar "DWGNAME") (getvar "DWGPREFIX"))` if
+its payload comes back unreadable.
 
 Space is not a detail, and it bites edits as hard as probes:
 
@@ -112,7 +117,8 @@ the result, not with text, width and entity count** — all three read clean on 
 is in the wrong space. See `references/activex-and-lisp-limits.md`.
 
 **To back out an edit, use `drawing(undo)`** — every verb opens one named UNDO group
-(`mcp:undo-begin`/`mcp:undo-end`; use them in hand-written edits too), so one undo reverses
+(`(mcp:undo-begin "<label>")`/`(mcp:undo-end)`; use them in hand-written edits too — the
+label is required, a bare `(mcp:undo-begin)` errors `too few arguments`), so one undo reverses
 the whole batch. Never reverse a move by moving back: a re-move with a slightly different
 offset leaves a drawing that is not the one you started with.
 

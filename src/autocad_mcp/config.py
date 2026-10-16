@@ -99,10 +99,31 @@ def _write_debug_snapshot(backend_env: str):
         pass
 
 
+def _raise_if_start_tab_active() -> None:
+    """AutoCAD is running but no drawing window was found: Start is in front.
+
+    Measured 2026-10-16: re-detecting while Start was active found no window
+    with ".dwg" in its title, so `auto` fell through to ezdxf and the next calls
+    read an empty in-memory drawing (entity_count 0, save_path null) instead of
+    failing. An AutoCAD that is present must never be mistaken for one that is not.
+    """
+    from autocad_mcp.doc_switch import find_autocad_frame, open_document_titles
+
+    frame = find_autocad_frame()
+    if not frame:
+        return
+    raise RuntimeError(
+        "start_tab_active: AutoCAD is running but the Start tab is in front, so there is no drawing "
+        f"to talk to. Open drawings: {open_document_titles(frame)}. Switch with "
+        "system(operation='switch_doc', data={'dwg': '<filename>'}) or click a drawing tab, then retry."
+    )
+
+
 def detect_backend() -> str:
     """Return the backend name to use: 'file_ipc' or 'ezdxf'.
 
-    Raises RuntimeError with actionable message if explicit backend fails.
+    Raises RuntimeError with actionable message if explicit backend fails,
+    or if AutoCAD is running with the Start tab in front (never falls to ezdxf then).
     """
     backend_env = _current_backend_env()
     _write_debug_snapshot(backend_env)
@@ -119,7 +140,8 @@ def detect_backend() -> str:
                 if hwnd:
                     log.info("autocad_window_found", hwnd=hwnd)
                     return "file_ipc"
-                elif backend_env == "file_ipc":
+                _raise_if_start_tab_active()
+                if backend_env == "file_ipc":
                     raise RuntimeError(
                         "AUTOCAD_MCP_BACKEND=file_ipc but no AutoCAD window found. "
                         "Start AutoCAD LT and open a .dwg file."

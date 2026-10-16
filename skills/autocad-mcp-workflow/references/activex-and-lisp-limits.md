@@ -187,5 +187,5 @@ Copy-Item "source.dwg" "destination.dwg"
 (vla-open (vla-get-Documents (vlax-get-acad-object)) "C:/path/destination.dwg")
 ```
 `vla-open` does not reliably move focus (Rule 2; 2026-10-08 it opened the file and focus
-stayed on the source) — `(mcp:whoami)` before editing, and expect to ask Gianni to click the
-new tab.
+stayed on the source) — move it with `system(switch_doc, data={"dwg": "destination.dwg"})`,
+then `(mcp:whoami)` before editing.
