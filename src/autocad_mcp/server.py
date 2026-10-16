@@ -15,6 +15,7 @@ from autocad_mcp.client import (
     get_backend,
 )
 from autocad_mcp import config
+from autocad_mcp.backends.base import CommandResult
 from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION, SCREENSHOT_MAX_DIMENSION_RANGE
 
 # FastMCP validates return types via Pydantic. Tools that may return
@@ -623,6 +624,12 @@ async def system(
                       prompt row. Works while a command is waiting for input,
                       when every dispatcher-routed read is refused. data: {n?}
                       (default 10, max 200). File IPC on Windows only.
+      switch_doc    — Make another open drawing the active one, no click or
+                      keystroke. data: {dwg: "<filename>"} (exact tab title; a
+                      full path is reduced to its filename; "Start" refused).
+                      Moves the MDI child, re-initializes the backend and its
+                      libraries, then confirms DWGNAME; ok only if DWGNAME matches.
+                      Works with the Start tab in front. File IPC on Windows only.
       assert_doc    — Verify the active drawing matches expected name before a batch.
                       data: {expected: "<filename>"}. Returns ok:true when names match,
                       ok:false / error:"wrong_doc" when they differ (actual name in payload).
@@ -697,6 +704,32 @@ async def system(
         else:
             result = await read_command_line(find_autocad_window(), n)
         return _json(result.to_dict())
+    elif operation == "switch_doc":
+        # Not get_backend() first: with Start in front there is no backend to
+        # get, and that is one of the states this exists to leave.
+        from autocad_mcp import client
+        from autocad_mcp.doc_switch import switch_doc
+
+        moved = await switch_doc(data.get("dwg", ""))
+        if not moved.ok:
+            return _json(moved.to_dict())
+        # The window moved; AutoCAD's document manager is the real evidence.
+        # Re-detect exactly as init does, so the hwnd, probes and libraries
+        # all belong to the drawing now in front.
+        client._backend = None
+        backend = await get_backend()
+        libs = await backend.load_libraries()
+        payload = dict(moved.payload)
+        payload["dwgname"] = libs.payload.get("dwg") if libs.ok and isinstance(libs.payload, dict) else None
+        payload["preflight"] = libs.payload if libs.ok else {"error": libs.error}
+        if (payload["dwgname"] or "").lower() != (payload["after"] or "").lower():
+            return _json(CommandResult(
+                ok=False,
+                error=f"dwgname_mismatch: the tab moved to '{payload['after']}' but DWGNAME is "
+                f"'{payload['dwgname']}'. Do not edit; check with system(operation='status').",
+                payload=payload,
+            ).to_dict())
+        return _json(CommandResult(ok=True, payload=payload).to_dict())
     elif operation == "assert_doc":
         backend = await get_backend()
         expected = data.get("expected")
