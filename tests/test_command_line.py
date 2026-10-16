@@ -52,6 +52,17 @@ class TestCommand:
 
 
 class TestRead:
+    @pytest.fixture(autouse=True)
+    def _windows(self):
+        """The platform guard runs first; past it the plumbing is OS-neutral."""
+        with patch("sys.platform", "win32"):
+            yield
+
+    def test_refuses_off_windows(self):
+        with patch("sys.platform", "linux"):
+            r = asyncio.run(cl.read_command_line(5))
+        assert not r.ok and "Windows UI Automation" in r.error
+
     def test_no_hwnd(self):
         r = asyncio.run(cl.read_command_line(None))
         assert not r.ok and "system(init)" in r.error
