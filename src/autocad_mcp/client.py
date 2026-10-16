@@ -78,7 +78,9 @@ def _error(e: Exception, context: str = "") -> str:
     msg = str(e)
     msg_lower = msg.lower()
 
-    if "window not found" in msg_lower or "no autocad" in msg_lower:
+    if "start_tab_active" in msg_lower:
+        hint = "Switch to a drawing with system(operation='switch_doc', data={'dwg': '<filename>'})."
+    elif "window not found" in msg_lower or "no autocad" in msg_lower:
         hint = "AutoCAD LT is not running or no drawing is open. Start AutoCAD and open a .dwg file."
     elif "timeout" in msg_lower:
         hint = "Command timed out. AutoCAD may be in a modal dialog. Press ESC in AutoCAD and retry."
