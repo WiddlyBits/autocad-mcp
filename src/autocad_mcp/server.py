@@ -539,6 +539,7 @@ async def view(
             "width": result.payload["width"],
             "height": result.payload["height"],
             "est_tokens": result.payload["est_tokens"],
+            "hint": None,
         }
 
         if save_to:

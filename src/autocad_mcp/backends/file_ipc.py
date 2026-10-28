@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 import uuid
@@ -28,6 +29,25 @@ log = structlog.get_logger()
 POLL_INTERVAL = 0.1  # seconds
 TIMEOUT = IPC_TIMEOUT  # seconds (configurable via AUTOCAD_MCP_IPC_TIMEOUT)
 STALE_THRESHOLD = 60.0  # clean up files older than this
+
+# Commands that write to the drawing — a timeout on these may have partially applied.
+_MUTATING_COMMANDS: frozenset[str] = frozenset({
+    "create-line", "create-circle", "create-polyline", "create-rectangle",
+    "create-arc", "create-ellipse", "create-mtext", "create-hatch", "create-text",
+    "create-dimension-linear", "create-dimension-aligned",
+    "create-dimension-angular", "create-dimension-radius", "create-leader",
+    "entity-erase", "entity-move", "entity-copy", "entity-rotate", "entity-scale",
+    "entity-mirror", "entity-offset", "entity-array", "entity-fillet", "entity-chamfer",
+    "block-insert", "block-insert-with-attributes", "block-update-attribute", "block-define",
+    "layer-create", "layer-set-current", "layer-set-properties",
+    "layer-freeze", "layer-thaw", "layer-lock", "layer-unlock",
+    "drawing-save", "drawing-save-as-dxf", "drawing-plot-pdf", "drawing-purge",
+    "execute-lisp",
+    "pid-setup-layers", "pid-insert-symbol", "pid-draw-process-line",
+    "pid-connect-equipment", "pid-add-flow-arrow", "pid-add-equipment-tag",
+    "pid-add-line-number", "pid-insert-valve", "pid-insert-instrument",
+    "pid-insert-pump", "pid-insert-tank",
+})
 
 
 def find_autocad_window() -> int | None:
@@ -61,6 +81,7 @@ class FileIPCBackend(AutoCADBackend):
         self._ipc_dir = Path(IPC_DIR)
         self._screenshot_provider = None
         self._lock = asyncio.Lock()  # Single in-flight command
+        self._status_file = self._ipc_dir / "mcp_status.txt"
 
     @property
     def name(self) -> str:
@@ -120,6 +141,12 @@ class FileIPCBackend(AutoCADBackend):
 
         return CommandResult(ok=True, payload={"backend": "file_ipc", "hwnd": self._hwnd})
 
+    def _write_status(self, msg: str) -> None:
+        try:
+            self._status_file.write_text(msg, encoding="utf-8")
+        except OSError:
+            pass
+
     async def status(self) -> CommandResult:
         info = {
             "backend": "file_ipc",
@@ -127,6 +154,10 @@ class FileIPCBackend(AutoCADBackend):
             "ipc_dir": str(self._ipc_dir),
             "capabilities": {k: v for k, v in self.capabilities.__dict__.items()},
         }
+        try:
+            info["mcp_status"] = self._status_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            info["mcp_status"] = "unknown"
         return CommandResult(ok=True, payload=info)
 
     # --- IPC dispatch ---
@@ -143,6 +174,7 @@ class FileIPCBackend(AutoCADBackend):
         result_file = self._ipc_dir / f"autocad_mcp_result_{request_id}.json"
         tmp_file = cmd_file.with_suffix(".tmp")
 
+        self._write_status(f"busy:{command}")
         try:
             # Strip None values — the simple LISP JSON parser can't handle null
             clean_params = {k: v for k, v in params.items() if v is not None}
@@ -182,9 +214,16 @@ class FileIPCBackend(AutoCADBackend):
                         pass  # File may be partially written, retry
                 await asyncio.sleep(POLL_INTERVAL)
 
+            if command in _MUTATING_COMMANDS:
+                return CommandResult(
+                    ok=False,
+                    error="timeout_mutating",
+                    payload={"may_have_applied": True, "request_id": request_id},
+                )
             return CommandResult(ok=False, error=f"Timeout waiting for result (request_id={request_id})")
 
         finally:
+            self._write_status("idle")
             # Cleanup
             for f in (cmd_file, result_file, tmp_file):
                 try:
@@ -255,14 +294,58 @@ class FileIPCBackend(AutoCADBackend):
 
     # --- Drawing management ---
 
+    @staticmethod
+    def _file_state(path: str) -> tuple[int, int] | None:
+        """(mtime_ns, size) of path, or None when it does not exist."""
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _verify_file_written(
+        self, path: str, before: tuple[int, int] | None
+    ) -> CommandResult | None:
+        """Return an error CommandResult unless path is new or its mtime/size moved.
+
+        Compares against the file's own state from before the call, not the
+        wall clock: AutoCAD stamps a .dwg mtime to the whole second, so a save
+        landing inside the second it started compared <= time.time() and read
+        as unchanged (x.dwg from a .dwt, 2026-10-08).
+        """
+        after = self._file_state(path)
+        if after is None:
+            return CommandResult(
+                ok=False, error="save_unverified",
+                payload={"detail": "file not found", "path": path},
+            )
+        if after == before:
+            return CommandResult(
+                ok=False, error="save_unverified",
+                payload={"detail": "timestamp unchanged", "path": path},
+            )
+        return None
+
     async def drawing_info(self) -> CommandResult:
         return await self._dispatch("drawing-info", {})
 
     async def drawing_save(self, path: str | None = None) -> CommandResult:
-        return await self._dispatch("drawing-save", {"path": path})
+        before = self._file_state(path) if path else None
+        result = await self._dispatch("drawing-save", {"path": path})
+        if result.ok and path:
+            err = self._verify_file_written(path, before)
+            if err:
+                return err
+        return result
 
     async def drawing_save_as_dxf(self, path: str) -> CommandResult:
-        return await self._dispatch("drawing-save-as-dxf", {"path": path})
+        before = self._file_state(path)
+        result = await self._dispatch("drawing-save-as-dxf", {"path": path})
+        if result.ok:
+            err = self._verify_file_written(path, before)
+            if err:
+                return err
+        return result
 
     async def drawing_create(self, name: str | None = None) -> CommandResult:
         return await self._dispatch("drawing-create", {"name": name})
@@ -271,7 +354,13 @@ class FileIPCBackend(AutoCADBackend):
         return await self._dispatch("drawing-purge", {})
 
     async def drawing_plot_pdf(self, path: str) -> CommandResult:
-        return await self._dispatch("drawing-plot-pdf", {"path": path})
+        before = self._file_state(path)
+        result = await self._dispatch("drawing-plot-pdf", {"path": path})
+        if result.ok:
+            err = self._verify_file_written(path, before)
+            if err:
+                return err
+        return result
 
     async def drawing_get_variables(self, names: list[str] | None = None) -> CommandResult:
         if names:
