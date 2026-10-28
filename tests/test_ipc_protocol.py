@@ -7,6 +7,7 @@ and CommandResult serialization.
 
 import json
 import os
+import sys
 import tempfile
 import time
 import uuid
@@ -518,7 +519,6 @@ class TestSemicolonEncoding:
 # Variable name $ prefix stripping
 # ---------------------------------------------------------------------------
 
-
 class TestVariableNameStripping:
     def test_strip_dollar_prefix(self):
         """File IPC strips $ prefix from ezdxf-style variable names."""
@@ -536,3 +536,162 @@ class TestVariableNameStripping:
         names = None
         names_str = "" if not names else ";".join(names)
         assert names_str == ""
+
+
+# ---------------------------------------------------------------------------
+# Stale IPC files and stale window handles
+# ---------------------------------------------------------------------------
+
+
+class TestStaleIpcDetection:
+    """_check_stale_ipc_files detects leftover files from timed-out dispatches."""
+
+    def _backend_with_tmpdir(self, tmpdir: str):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._ipc_dir = Path(tmpdir)
+        return backend
+
+    def test_no_stale_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backend = self._backend_with_tmpdir(tmpdir)
+            assert backend._check_stale_ipc_files() == []
+
+    def test_stale_cmd_file_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stale = Path(tmpdir) / "autocad_mcp_cmd_abc123def456.json"
+            stale.write_text('{"request_id": "abc123def456"}')
+            backend = self._backend_with_tmpdir(tmpdir)
+            found = backend._check_stale_ipc_files()
+            assert len(found) == 1
+            assert found[0] == stale
+
+    def test_stale_result_file_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stale = Path(tmpdir) / "autocad_mcp_result_deadbeef1234.json"
+            stale.write_text('{"ok": true}')
+            backend = self._backend_with_tmpdir(tmpdir)
+            found = backend._check_stale_ipc_files()
+            assert len(found) == 1
+            assert found[0] == stale
+
+    def test_multiple_stale_files_detected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name in (
+                "autocad_mcp_cmd_111111111111.json",
+                "autocad_mcp_result_222222222222.json",
+            ):
+                (Path(tmpdir) / name).write_text("{}")
+            backend = self._backend_with_tmpdir(tmpdir)
+            assert len(backend._check_stale_ipc_files()) == 2
+
+    def test_unrelated_files_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "some_other_file.json").write_text("{}")
+            (Path(tmpdir) / "autocad_mcp_lisp_abc123.lsp").write_text("(+ 1 2)")
+            backend = self._backend_with_tmpdir(tmpdir)
+            assert backend._check_stale_ipc_files() == []
+
+    def test_nonexistent_ipc_dir_returns_empty(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._ipc_dir = Path("C:/does/not/exist/at/all")
+        assert backend._check_stale_ipc_files() == []
+
+
+class TestConditionalEscInjection:
+    """_type_dispatch_trigger only injects ESC when inject_esc=True."""
+
+    def test_inject_esc_false_by_default(self):
+        import inspect
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        sig = inspect.signature(FileIPCBackend._type_dispatch_trigger)
+        assert sig.parameters["inject_esc"].default is False
+
+    def test_inject_esc_parameter_exists(self):
+        import inspect
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        sig = inspect.signature(FileIPCBackend._type_dispatch_trigger)
+        assert "inject_esc" in sig.parameters
+
+
+class TestStaleHwnd:
+    """_reacquire_hwnd transparently recovers from a stale cached window handle."""
+
+    def test_reacquire_updates_hwnd_when_window_found(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        with patch("autocad_mcp.backends.file_ipc.find_autocad_window", return_value=0xBEEF):
+            with patch.object(backend, "_find_command_line_hwnd", return_value=0xCAFE):
+                result = backend._reacquire_hwnd()
+        assert result is True
+        assert backend._hwnd == 0xBEEF
+        assert backend._command_hwnd == 0xCAFE
+
+    def test_reacquire_returns_false_when_autocad_not_found(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        with patch("autocad_mcp.backends.file_ipc.find_autocad_window", return_value=None):
+            result = backend._reacquire_hwnd()
+        assert result is False
+        assert backend._hwnd == 0xDEAD  # unchanged
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform != "win32", reason="requires pywin32")
+    async def test_dispatch_reacquires_on_stale_hwnd_then_proceeds(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        dispatch_called = []
+        original_dispatch = FileIPCBackend._dispatch_unlocked
+
+        async def fake_dispatch(self, command, params):
+            dispatch_called.append(command)
+            return CommandResult(ok=True)
+
+        with patch("sys.platform", "win32"):
+            with patch("win32gui.IsWindow", return_value=False):
+                with patch.object(backend, "_reacquire_hwnd", return_value=True) as mock_reacquire:
+                    with patch.object(backend, "_dispatch", new_callable=AsyncMock) as mock_dispatch:
+                        mock_dispatch.return_value = CommandResult(ok=True)
+                        # Directly call _dispatch_unlocked to exercise the guard
+                        with patch.object(backend, "_check_stale_ipc_files", return_value=[]):
+                            with patch.object(backend, "_write_status"):
+                                with patch.object(backend, "_type_dispatch_trigger"):
+                                    import tempfile
+                                    with tempfile.TemporaryDirectory() as tmpdir:
+                                        backend._ipc_dir = Path(tmpdir)
+                                        # Simulate AutoCAD writing the result file
+                                        import uuid as _uuid
+                                        original_uuid = _uuid.uuid4
+
+                                        fixed_id = "aabbccddeeff"
+
+                                        def fake_uuid4():
+                                            class FakeUUID:
+                                                hex = fixed_id
+                                            return FakeUUID()
+
+                                        result_path = Path(tmpdir) / f"autocad_mcp_result_{fixed_id}.json"
+                                        result_path.write_text(
+                                            json.dumps({"ok": True, "request_id": fixed_id})
+                                        )
+                                        with patch("uuid.uuid4", fake_uuid4):
+                                            result = await backend._dispatch_unlocked("ping", {})
+                        mock_reacquire.assert_called_once()
+        assert result.ok is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform != "win32", reason="requires pywin32")
+    async def test_dispatch_returns_autocad_not_found_when_reacquire_fails(self):
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        backend._hwnd = 0xDEAD
+        with patch("sys.platform", "win32"):
+            with patch("win32gui.IsWindow", return_value=False):
+                with patch.object(backend, "_reacquire_hwnd", return_value=False):
+                    result = await backend._dispatch_unlocked("ping", {})
+        assert result.ok is False
+        assert result.error == "autocad_not_found"
