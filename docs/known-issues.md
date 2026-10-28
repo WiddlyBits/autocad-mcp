@@ -29,12 +29,15 @@ change once instead of from two parents.
 
 ## Not yet run live (UNTESTED on LT 2027)
 
-Covered by unit tests only:
+Covered by unit tests only. All four were run live on 2026-10-28 against the
+`series/10c-docs` dispatcher, whose `entity-erase`, `undo` and `drawing-save` handlers differ
+from this branch's, so they still count as untested here:
 
 - `entity(erase)` through `_.ERASE`, then `U` restoring the entity.
-- `redo` is refused because the dispatch command is said to clear the redo stack. Nobody has
-  measured that.
-- `timeout_not_dispatched` and `autocad_busy`. `command_active` was verified live on 2026-10-14.
+- `redo` is refused because the dispatch command is said to clear the redo stack. On the series
+  dispatcher a dispatched `entity(count)` between `U` and `REDO` did not clear it
+  ("Everything has been redone"); this branch's dispatch path was not measured.
+- `timeout_not_dispatched`. `command_active` was verified live on 2026-10-14.
 - Saving to a new `.dwg` without a false `save_unverified`.
 
 ## LT 2027 limits (measured)
@@ -47,3 +50,8 @@ Covered by unit tests only:
 - `acaddoc.lsp` does not autoload, even on the support path with `SECURELOAD=0`; the APPLOAD
   Startup Suite does.
 - `DWGNAME` is the filename only, never a path; `(mcp:whoami)` adds `DWGPREFIX`.
+- LT registers no COM class: `GetActiveObject("AutoCAD.Application")` raises
+  `-2147221005 Invalid class string` (2026-10-28). `_is_autocad_busy` treats that as not busy,
+  so `autocad_busy` never fires on LT; `command_active` covers the busy-prompt case.
+- Trigger keystrokes posted while a modal dialog is open are queued, not dropped, and run
+  when it closes (2026-10-28).
