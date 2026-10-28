@@ -18,6 +18,25 @@ Crossing-mode grid maps still draw them, because `ssget` sees geometry the bbox 
 **`mcp:in-model-space` has no call sites.** It wraps an `entmakex` in `CTAB "Model"` and restores
 the tab. Use it only when the target is model space; a paper-space rebuild must not be wrapped.
 
+**ezdxf `create_*` payloads have no `layer`.** They return `{"entity_type", "handle"}`; the
+fix (every create verb reports its layer, both backends) is on the `series/10b-command-claim`
+stack and lands when that merges (decided 2026-10-28), so `mcp_dispatch.lsp` takes the
+change once instead of from two parents.
+
+**`expected_doc` is backend-only.** No tool sets the `expected_doc` argument of
+`_dispatch`/`execute_lisp`; only backend code can. A tool caller gets the same check by calling
+`system(assert_doc)` first, at the cost of one extra round trip.
+
+## Not yet run live (UNTESTED on LT 2027)
+
+Covered by unit tests only:
+
+- `entity(erase)` through `_.ERASE`, then `U` restoring the entity.
+- `redo` is refused because the dispatch command is said to clear the redo stack. Nobody has
+  measured that.
+- `timeout_not_dispatched` and `autocad_busy`. `command_active` was verified live on 2026-10-14.
+- Saving to a new `.dwg` without a false `save_unverified`.
+
 ## LT 2027 limits (measured)
 
 - `entmakex` is unsupported for non-graphical objects (XRECORD and other named objects) in LT;
