@@ -185,3 +185,36 @@ class TestLispDoesNotDivergeFromTheProbes:
     def test_probes_also_treat_group_50_as_radians(self):
         probes = (DISPATCH_LSP.parent / "mcp_probes.lsp").read_text(encoding="utf-8")
         assert "(/ (* 180.0 (mcp:group data 50 0.0)) pi)" in probes
+
+
+#: Every create verb, with the arguments to call the ezdxf method with.
+CREATES = {
+    "mcp-cmd-create-line": ("create_line", (0, 0, 1, 1)),
+    "mcp-cmd-create-circle": ("create_circle", (0, 0, 1)),
+    "mcp-cmd-create-polyline": ("create_polyline", ([[0, 0], [1, 0], [1, 1]],)),
+    "mcp-cmd-create-rectangle": ("create_rectangle", (0, 0, 1, 1)),
+    "mcp-cmd-create-arc": ("create_arc", (0, 0, 1, 0, 90)),
+    "mcp-cmd-create-ellipse": ("create_ellipse", (0, 0, 2, 0, 0.5)),
+    "mcp-cmd-create-mtext": ("create_mtext", (0, 0, 10, "x")),
+    "mcp-cmd-create-text": ("create_text", (0, 0, "x")),
+}
+
+
+class TestCreateReportsLayer:
+    """A create call names the layer the entity actually landed on, so the
+    caller does not spend an entity(get) to find out. Both backends."""
+
+    @pytest.mark.parametrize("defun", sorted(CREATES))
+    def test_lisp_returns_layer(self, defun):
+        body = _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), defun)
+        assert '"\\",\\"layer\\":\\""' in body
+        assert "(assoc 8 ed)" in body
+
+    @pytest.mark.parametrize("defun", sorted(CREATES))
+    async def test_ezdxf_returns_layer(self, defun):
+        method, args = CREATES[defun]
+        backend = EzdxfBackend()
+        await backend.initialize()
+        result = await getattr(backend, method)(*args, layer="L1")
+        assert result.ok, result.error
+        assert result.payload["layer"] == "L1"
