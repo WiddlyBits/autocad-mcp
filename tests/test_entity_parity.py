@@ -161,3 +161,17 @@ class TestFieldsThatNeedMoreThanAssoc:
             DISPATCH_LSP.read_text(encoding="utf-8"), "mcp-polyline-vertices"
         )
         assert '"VERTEX"' in body
+
+
+class TestErasedHandleIsNotFound:
+    """handent returns an ename for an erased entity, so `(not ent)` alone lets
+    it through and entget's nil reaches strcat: `bad argument type: stringp nil`
+    (field-verified 2026-09-18), and entity(erase)'s entdel would restore the entity
+    and report it erased. Both verbs that take a handle must test entget."""
+
+    @pytest.mark.parametrize("defun", ["mcp-cmd-entity-get", "mcp-cmd-entity-erase"])
+    def test_existence_check_tests_entget(self, defun):
+        body = strip_lisp(
+            _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), defun)
+        )
+        assert "(and ent (entget ent))" in body

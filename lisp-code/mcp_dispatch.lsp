@@ -677,7 +677,9 @@
         (cons nil "No entity to erase")))
     (progn
       (setq ent (handent entity-id))
-      (if ent (progn (entdel ent) (cons T (strcat "\"erased " entity-id "\"")))
+      ;; entdel on an erased ename un-erases it, so test entget, as entity-get does.
+      (if (and ent (entget ent))
+        (progn (entdel ent) (cons T (strcat "\"erased " entity-id "\"")))
         (cons nil (strcat "Entity not found: " entity-id))))
   )
 )
@@ -929,7 +931,8 @@
     (setq ent (entlast))
     (setq ent (handent entity-id))
   )
-  (if (not ent)
+  ;; handent hands back an ename for an erased entity; only entget says it is gone.
+  (if (not (and ent (entget ent)))
     (cons nil (strcat "Entity not found: " entity-id))
     (progn
       (setq ent-data (entget ent))
