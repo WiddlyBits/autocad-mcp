@@ -169,7 +169,10 @@
 
 (defun mcp-dispatch-command (cmd-name params-json / result old-filedia)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
-  (cond
+  (if (not (= "" (getvar "CMDNAMES")))
+    (cons nil (strcat "{\"error\":\"command_active\",\"active\":\""
+                      (mcp-escape-string (getvar "CMDNAMES")) "\"}"))
+    (cond
     ;; --- Ping ---
     ((= cmd-name "ping")
      (cons T "\"pong\""))
@@ -420,7 +423,7 @@
 
     ;; --- Unknown ---
     (t (cons nil (strcat "Unknown command: " cmd-name)))
-  )
+  ))
 )
 
 ;; -----------------------------------------------------------------------
