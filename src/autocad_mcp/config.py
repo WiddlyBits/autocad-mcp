@@ -10,6 +10,20 @@ import structlog
 
 log = structlog.get_logger()
 
+
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    """Read an int env var clamped to [low, high], falling back to default if unset/invalid.
+
+    Malformed values fall back rather than raising — a bad env var should not stop
+    the MCP server from starting.
+    """
+    try:
+        return max(low, min(high, int(os.environ.get(name, default))))
+    except (TypeError, ValueError):
+        log.warning("invalid_env_int", var=name, fallback=default)
+        return default
+
+
 # Paths
 LISP_DIR = Path(__file__).resolve().parent.parent.parent / "lisp-code"
 IPC_DIR = Path(os.environ.get("AUTOCAD_MCP_IPC_DIR", "C:/temp"))
@@ -22,6 +36,20 @@ IPC_TIMEOUT = max(1.0, min(300.0, float(os.environ.get("AUTOCAD_MCP_IPC_TIMEOUT"
 
 # Screenshot
 ONLY_TEXT_FEEDBACK = os.environ.get("AUTOCAD_MCP_ONLY_TEXT", "").lower() in ("1", "true", "yes")
+
+# Default cap (longest side, in pixels) applied to captured screenshots unless a
+# caller explicitly passes max_dimension=None for full resolution.
+#
+# This is the lever that controls an LLM's cost for a screenshot: images are
+# billed as ceil(w/28) * ceil(h/28) visual tokens, so token cost falls roughly
+# with the square of the cap and does not depend on the encoded file size at all.
+# At 1280 a typical AutoCAD window costs ~1.2-1.3k visual tokens instead of the
+# ~3-4.8k it costs uncapped.
+#
+# The upper clamp is 2576 because the vision API downscales anything longer than
+# that (and caps a single image at 4784 visual tokens) before the model sees it —
+# pixels beyond that ceiling are transmitted and then discarded.
+SCREENSHOT_MAX_DIMENSION = _env_int("AUTOCAD_MCP_SCREENSHOT_MAX_DIM", 1280, 64, 2576)
 
 # Win32 availability
 WIN32_AVAILABLE = sys.platform == "win32"

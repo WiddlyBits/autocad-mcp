@@ -11,7 +11,7 @@ import structlog
 from mcp.types import ImageContent, TextContent
 
 from autocad_mcp.backends.base import AutoCADBackend, CommandResult
-from autocad_mcp.config import ONLY_TEXT_FEEDBACK, detect_backend
+from autocad_mcp.config import ONLY_TEXT_FEEDBACK, SCREENSHOT_MAX_DIMENSION, detect_backend
 
 log = structlog.get_logger()
 
@@ -123,7 +123,7 @@ def _safe(tool_name: str):
 def _format_result(
     result: CommandResult,
     include_screenshot: bool = False,
-    screenshot_data: str | None = None,
+    screenshot_data: dict[str, str] | None = None,
 ) -> list[TextContent | ImageContent] | str:
     """Format a CommandResult for MCP response.
 
@@ -139,8 +139,8 @@ def _format_result(
         TextContent(type="text", text=text),
         ImageContent(
             type="image",
-            data=screenshot_data,
-            mimeType="image/png",
+            data=screenshot_data["data"],
+            mimeType=screenshot_data["mime"],
         ),
     ]
 
@@ -148,13 +148,19 @@ def _format_result(
 async def add_screenshot_if_available(
     result: CommandResult,
     include_screenshot: bool = False,
+    max_dimension: int | None = SCREENSHOT_MAX_DIMENSION,
+    quality: int | None = None,
 ) -> list[TextContent | ImageContent] | str:
-    """Conditionally append a screenshot to the result."""
+    """Conditionally append a screenshot to the result.
+
+    max_dimension caps the longest side in pixels (None = full resolution, the
+    old default). quality (1-95), if given, encodes as JPEG instead of PNG.
+    """
     if not include_screenshot or ONLY_TEXT_FEEDBACK:
         return _json(result.to_dict())
 
     backend = await get_backend()
-    screenshot_result = await backend.get_screenshot()
+    screenshot_result = await backend.get_screenshot(max_dimension=max_dimension, quality=quality)
 
     if screenshot_result.ok and screenshot_result.payload:
         return _format_result(result, True, screenshot_result.payload)
