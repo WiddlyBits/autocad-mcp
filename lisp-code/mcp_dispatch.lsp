@@ -17,6 +17,10 @@
 ;; IPC directory
 (setq *mcp-ipc-dir* "C:/temp/")
 
+;; Reported by ping. 2 = c:mcp-dispatch claims cmd_<id> by renaming it to
+;; run_<id> before dispatching (file_ipc.py gates timeout_not_dispatched on it).
+(setq *mcp-dispatcher-version* 2)
+
 ;; -----------------------------------------------------------------------
 ;; JSON-like output helpers (minimal, no external library)
 ;; -----------------------------------------------------------------------
@@ -175,7 +179,7 @@
     (cond
     ;; --- Ping ---
     ((= cmd-name "ping")
-     (cons T "\"pong\""))
+     (cons T (strcat "{\"pong\":true,\"dispatcher\":" (itoa *mcp-dispatcher-version*) "}")))
 
     ;; --- Freehand LISP execution ---
     ((= cmd-name "execute-lisp")
@@ -1430,15 +1434,20 @@
 ;; -----------------------------------------------------------------------
 
 (defun c:mcp-dispatch ( / cmd-files cmd-file json-text request-id cmd-name params-str result result-file)
-  "Find pending command file, dispatch, write result."
+  "Find pending command file, claim it, dispatch, write result."
   ;; Find first pending command file
   (setq cmd-files (vl-directory-files *mcp-ipc-dir* "autocad_mcp_cmd_*.json" 1))
   (if (not cmd-files)
     (progn (princ "\nMCP: No pending commands") (princ))
     (progn
-      ;; Process first command
-      (setq cmd-file (strcat *mcp-ipc-dir* (car cmd-files)))
-      (setq json-text (mcp-read-file-lines cmd-file))
+      ;; Claim: rename cmd_<id> to run_<id> before anything runs. Python's
+      ;; timeout path deletes cmd_<id>; if that delete succeeds the command was
+      ;; never claimed and cannot have applied. A failed rename means Python
+      ;; already withdrew it, so do nothing.
+      (setq cmd-file (strcat *mcp-ipc-dir* "autocad_mcp_run_" (substr (car cmd-files) 17)))
+      (setq json-text
+        (if (vl-file-rename (strcat *mcp-ipc-dir* (car cmd-files)) cmd-file)
+          (mcp-read-file-lines cmd-file)))
 
       (if (not json-text)
         (princ "\nMCP: Cannot read command file")
