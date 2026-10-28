@@ -280,11 +280,17 @@ class AutoCADBackend(ABC):
         return CommandResult(ok=False, error="Not supported on this backend")
 
     async def get_screenshot(
-        self, max_dimension: int | None = SCREENSHOT_MAX_DIMENSION, quality: int | None = None
+        self,
+        max_dimension: int | None = SCREENSHOT_MAX_DIMENSION,
+        quality: int | None = None,
+        region: tuple[int, int, int, int] | None = None,
     ) -> CommandResult:
-        """Return {"data": base64 image, "mime": mime type} in payload.
+        """Return the encoded image in payload.
+
+        Payload keys: data (base64), mime, width, height, est_tokens.
 
         max_dimension caps the longest side in pixels (None = full resolution).
         quality (1-95), if given, encodes as JPEG instead of PNG.
+        region (left, top, right, bottom) crops the capture before downscaling.
         """
         return CommandResult(ok=False, error="Not supported on this backend")

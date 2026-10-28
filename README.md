@@ -151,12 +151,20 @@ You should see `backend: "file_ipc"` if AutoCAD is running, or `backend: "ezdxf"
 
 Screenshots use `PrintWindow` (Win32) for the File IPC backend — works even when AutoCAD is minimized or in the background. The ezdxf backend renders via matplotlib.
 
-`get_screenshot` accepts two sizing parameters, since screenshots dominate token usage in long automation sessions:
+`get_screenshot` accepts four cost parameters, since screenshots dominate token usage in long automation sessions:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_dimension` | `1280` | Cap on the longest side in pixels (clamped to 64–2576). Pass `null` for full resolution; non-positive values are treated as full resolution. Never upscales. |
+| `region` | `null` | `[left, top, right, bottom]` pixel rect of the captured window, cropped **before** downscaling so the crop keeps full source resolution. Clamped to the image; a region that is empty or entirely outside it is an error rather than a silent full-frame capture. |
+| `save_to` | `null` | Write the PNG to this path and return only its path and cost, with **no image attached**. |
+| `max_dimension` | `1280` | Cap on the longest side in pixels (clamped to 64–2576, as an argument and not only as an env default). Pass `null` for full resolution; non-positive values are treated as full resolution. Never upscales. |
 | `quality` | `null` | If set (clamped to 1–95), encodes JPEG instead of PNG. Shrinks the transferred payload; does **not** reduce token cost. |
+
+Every successful capture reports `width`, `height`, and `est_tokens` — what looking at it costs.
+
+**`region` is the strongest lever, because cropping precedes the downscale.** A 500×400 crop costs 270 visual tokens at native resolution; the whole 1928×1218 window costs 1,334 even after being downscaled to 1280 — and that downscale is exactly what makes small dimension text unreadable. For a detail check a crop is both ~5× cheaper and sharper.
+
+**`save_to` removes the cost entirely rather than reducing it.** The image goes to disk and nothing enters the context window, so a long edit can drop checkpoints as it goes and spend tokens reading back only the one that turned out to matter.
 
 **`max_dimension` is the parameter that controls cost.** Vision models bill an image as `ceil(width/28) * ceil(height/28)` visual tokens — a function of dimensions only, independent of file size or format. A 2560×1440 window costs 4,784 visual tokens uncapped and 1,196 at `max_dimension=1280`; a 1928×1218 window costs 3,036 and 1,334 respectively. Halving the cap roughly quarters the cost.
 
@@ -196,7 +204,7 @@ The File IPC backend sends keystrokes to AutoCAD's MDIClient window via `PostMes
 | `AUTOCAD_MCP_BACKEND` | `auto` | Backend selection: `auto`, `file_ipc`, `ezdxf` |
 | `AUTOCAD_MCP_IPC_DIR` | `C:/temp` | Directory for IPC command/result JSON files (must match on both Python and LISP sides) |
 | `AUTOCAD_MCP_IPC_TIMEOUT` | `10.0` | IPC command timeout in seconds (1-300) |
-| `AUTOCAD_MCP_ONLY_TEXT` | `false` | Disable screenshot capture (text feedback only) |
+| `AUTOCAD_MCP_ONLY_TEXT` | `false` | Suppress all returned images — both the `include_screenshot` option and `view(get_screenshot)`. The capture still runs and still reports `width`/`height`/`est_tokens`, so you can see what a run *would* have spent without spending it; `save_to` still writes to disk, since that costs no context. |
 | `AUTOCAD_MCP_SCREENSHOT_MAX_DIM` | `1280` | Default cap on a screenshot's longest side in pixels (64–2576). Invalid values fall back to the default. |
 
 > **Note:** If you change `AUTOCAD_MCP_IPC_DIR`, you must also update the `*mcp-ipc-dir*` variable in `mcp_dispatch.lsp` to match.
