@@ -13,6 +13,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -172,3 +173,44 @@ class TestSaveIsVerifiedOnDisk:
         result = await self._save(_backend(tmp_path), method, path, write=False)
         assert result.error == "save_unverified"
         assert result.payload["detail"] == "timestamp unchanged"
+
+
+class TestBusyAutoCADIsNotDispatchedTo:
+    """A keystroke trigger typed into a document that is mid-command lands in
+    that command's prompt. Document.IsQuiescent says so before anything is
+    written; when COM is not there to ask, dispatch goes ahead as before."""
+
+    @staticmethod
+    def _com(is_quiescent=None, error=None):
+        def get_active_object(_name):
+            if error:
+                raise error
+            return SimpleNamespace(ActiveDocument=SimpleNamespace(IsQuiescent=is_quiescent))
+
+        client = SimpleNamespace(GetActiveObject=get_active_object)
+        return patch.dict(sys.modules, {"win32com": SimpleNamespace(client=client),
+                                        "win32com.client": client})
+
+    async def test_busy_returns_before_writing_a_command(self, tmp_path):
+        backend = _backend(tmp_path)
+        with patch.object(sys, "platform", "linux"),                 patch.object(backend, "_is_autocad_busy", return_value=True),                 patch.object(backend, "_type_dispatch_trigger") as trigger:
+            result = await backend._dispatch_unlocked("drawing-info", {})
+        assert result.error == "autocad_busy"
+        trigger.assert_not_called()
+        assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
+
+    def test_mid_command_is_busy(self):
+        with patch.object(sys, "platform", "win32"), self._com(is_quiescent=False):
+            assert FileIPCBackend()._is_autocad_busy() is True
+
+    def test_quiescent_is_not_busy(self):
+        with patch.object(sys, "platform", "win32"), self._com(is_quiescent=True):
+            assert FileIPCBackend()._is_autocad_busy() is False
+
+    def test_no_com_is_not_busy(self):
+        with patch.object(sys, "platform", "win32"), self._com(error=OSError("no server")):
+            assert FileIPCBackend()._is_autocad_busy() is False
+
+    def test_off_windows_is_not_busy(self):
+        with patch.object(sys, "platform", "linux"):
+            assert FileIPCBackend()._is_autocad_busy() is False
