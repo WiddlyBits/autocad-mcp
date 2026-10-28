@@ -695,3 +695,131 @@ class TestStaleHwnd:
                     result = await backend._dispatch_unlocked("ping", {})
         assert result.ok is False
         assert result.error == "autocad_not_found"
+
+# ---------------------------------------------------------------------------
+# assert_doc response parsing
+# ---------------------------------------------------------------------------
+
+
+class TestAssertDoc:
+    """Unit tests for assert_doc Python-side parsing — no AutoCAD needed."""
+
+    @pytest.mark.asyncio
+    async def test_ok_response(self):
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(ok=True, payload="OK")
+            result = await backend.assert_doc("sheet-01.dwg")
+        assert result.ok is True
+        assert result.payload["doc"] == "sheet-01.dwg"
+
+    @pytest.mark.asyncio
+    async def test_wrong_doc_response(self):
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(ok=True, payload='("WRONG-DOC" "Drawing1.dwg")')
+            result = await backend.assert_doc("sheet-01.dwg")
+        assert result.ok is False
+        assert result.error == "wrong_doc"
+        assert result.payload["expected"] == "sheet-01.dwg"
+        assert "Drawing1.dwg" in result.payload["actual"]
+
+    @pytest.mark.asyncio
+    async def test_lisp_error_propagated(self):
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(
+                ok=False, error="LISP error: no function definition: MCP:ASSERT-DOC"
+            )
+            result = await backend.assert_doc("drawing.dwg")
+        assert result.ok is False
+        assert "MCP:ASSERT-DOC" in result.error
+
+    @pytest.mark.asyncio
+    async def test_execute_lisp_failure_keeps_its_payload(self):
+        """An execute_lisp failure passes through unchanged, payload included."""
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(
+                ok=False, error="timeout_mutating", payload={"may_have_applied": True}
+            )
+            result = await backend.assert_doc("drawing.dwg")
+        assert result.ok is False
+        assert result.error == "timeout_mutating"
+
+    @pytest.mark.asyncio
+    async def test_base_backend_returns_not_supported(self):
+        from autocad_mcp.backends.ezdxf_backend import EzdxfBackend
+        backend = EzdxfBackend()
+        await backend.initialize()
+        result = await backend.assert_doc("any.dwg")
+        assert result.ok is False
+        assert "Not supported" in result.error
+
+
+class TestPreBatchDocCheck:
+    """_dispatch runs assert_doc before writing the IPC file when expected_doc is given."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_proceeds_when_doc_matches(self):
+        """When expected_doc is given and assert_doc passes, the command is dispatched normally."""
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        ok_result = CommandResult(ok=True, payload={"doc": "target.dwg"})
+        cmd_result = CommandResult(ok=True, payload={"entity_type": "LINE", "handle": "1A2"})
+        with patch.object(backend, "assert_doc", new_callable=AsyncMock, return_value=ok_result):
+            with patch.object(backend, "_dispatch_unlocked", new_callable=AsyncMock, return_value=cmd_result) as mock_unlocked:
+                result = await backend._dispatch("create-line", {"x1": 0}, expected_doc="target.dwg")
+        assert result.ok is True
+        mock_unlocked.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_rejected_when_doc_mismatches(self):
+        """When expected_doc is given and assert_doc fails, the command is not sent."""
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        mismatch = CommandResult(
+            ok=False,
+            error="wrong_doc",
+            payload={"expected": "target.dwg", "actual": "Drawing1.dwg"},
+        )
+        with patch.object(backend, "assert_doc", new_callable=AsyncMock, return_value=mismatch):
+            with patch.object(backend, "_dispatch_unlocked", new_callable=AsyncMock) as mock_unlocked:
+                result = await backend._dispatch("create-line", {"x1": 0}, expected_doc="target.dwg")
+        assert result.ok is False
+        assert result.error == "wrong_doc"
+        assert result.payload["actual"] == "Drawing1.dwg"
+        mock_unlocked.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_skips_check_when_expected_doc_is_none(self):
+        """When expected_doc is None, assert_doc is never called."""
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        cmd_result = CommandResult(ok=True, payload="pong")
+        with patch.object(backend, "assert_doc", new_callable=AsyncMock) as mock_assert:
+            with patch.object(backend, "_dispatch_unlocked", new_callable=AsyncMock, return_value=cmd_result):
+                await backend._dispatch("ping", {})
+        mock_assert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execute_lisp_threads_expected_doc(self):
+        """execute_lisp passes expected_doc through to _dispatch."""
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        ok_result = CommandResult(ok=True, payload={"doc": "target.dwg"})
+        cmd_result = CommandResult(ok=True, payload='"done"')
+        with patch.object(backend, "assert_doc", new_callable=AsyncMock, return_value=ok_result) as mock_assert:
+            with patch.object(backend, "_dispatch_unlocked", new_callable=AsyncMock, return_value=cmd_result):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    backend._ipc_dir = Path(tmpdir)
+                    await backend.execute_lisp("(+ 1 2)", expected_doc="target.dwg")
+        mock_assert.assert_called_once_with("target.dwg")

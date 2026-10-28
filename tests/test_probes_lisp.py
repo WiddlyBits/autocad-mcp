@@ -429,3 +429,30 @@ class TestEntBBoxCoversTheReferenceTypes:
     def test_clipped_viewport_is_not_exact(self):
         body = _defun_body(source(PROBES_LSP), "mcp:ent-exact-p")
         assert "(assoc 340 data)" in body
+
+class TestDocumentHelpers:
+    """assert_doc and system-snapshot are thin Python over these defuns, so the
+    contract they rely on is checked here, from the source."""
+
+    def test_assert_doc_is_case_insensitive_and_names_the_actual_doc(self):
+        body = _defun_body(PROBES_LSP.read_text(encoding="utf-8"), "mcp:assert-doc")
+        assert '(strcase (getvar "DWGNAME"))' in body
+        assert "(strcase expected-name)" in body
+        assert '"OK"' in body
+        assert '(list "WRONG-DOC" (getvar "DWGNAME"))' in body
+
+    def test_sys_snapshot_reports_every_key(self):
+        body = _defun_body(PROBES_LSP.read_text(encoding="utf-8"), "mcp:sys-snapshot")
+        for key in ("dwgname", "clayer", "unsaved", "cmdnames", "ctab", "lastpoint", "errno"):
+            assert f'\\"{key}\\":' in body, key
+
+    def test_in_model_space_restores_ctab(self):
+        body = _defun_body(PROBES_LSP.read_text(encoding="utf-8"), "mcp:in-model-space")
+        assert body.index("(setq saved-tab") < body.index("(thunk)") < body.index("(setvar \"CTAB\" saved-tab)")
+
+    def test_dispatch_routes_system_snapshot_when_probes_are_loaded(self):
+        text = DISPATCH_LSP.read_text(encoding="utf-8")
+        branch = text[text.index('((= cmd-name "system-snapshot")'):]
+        branch = branch[: branch.index("(t (cons nil")]
+        assert "(fboundp 'mcp:sys-snapshot)" in branch
+        assert "mcp_probes.lsp not loaded" in branch

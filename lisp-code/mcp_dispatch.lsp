@@ -421,6 +421,12 @@
     ((= cmd-name "pid-list-symbols")
      (mcp-cmd-pid-list-symbols params-json))
 
+    ;; --- System state snapshot ---
+    ((= cmd-name "system-snapshot")
+     (if (fboundp 'mcp:sys-snapshot)
+       (cons T (mcp:sys-snapshot))
+       (cons nil "mcp_probes.lsp not loaded")))
+
     ;; --- Unknown ---
     (t (cons nil (strcat "Unknown command: " cmd-name)))
   ))

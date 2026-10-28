@@ -598,6 +598,10 @@ async def system(
       runtime       — Return process/runtime details for spawn diagnostics.
       init          — Re-initialize the backend.
       execute_lisp  — Execute arbitrary AutoLISP code (File IPC only). data: {code}
+      assert_doc    — Verify the active drawing matches expected name before a batch.
+                      data: {expected: "<filename>"}. Returns ok:true when names match,
+                      ok:false / error:"wrong_doc" when they differ (actual name in payload).
+                      Requires mcp_probes.lsp loaded in the drawing.
     """
     data = data or {}
 
@@ -639,6 +643,13 @@ async def system(
             return _json({"error": "data.code is required"})
         result = await backend.execute_lisp(data["code"])
         return await add_screenshot_if_available(result, include_screenshot)
+    elif operation == "assert_doc":
+        backend = await get_backend()
+        expected = data.get("expected")
+        if not expected:
+            return _json({"error": "data.expected is required"})
+        result = await backend.assert_doc(expected)
+        return _json(result.to_dict())
     else:
         return _json({"error": f"Unknown system operation: {operation}"})
 
