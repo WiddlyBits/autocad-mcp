@@ -19,9 +19,20 @@ measure.
 **`mcp:in-model-space` has no call sites.** It wraps a thunk in `CTAB "Model"` and restores the
 tab. Use it only when the target is model space; a paper-space rebuild must not be wrapped.
 
-**`assert_doc` does not escape its argument.** The expected name is spliced into
-`(mcp:assert-doc "<name>")` as-is, so a name containing `"` or `\` breaks the LISP form.
-`DWGNAME` is a bare filename, so this needs an unusual name to hit.
+**`expected_doc` is backend-only.** No tool sets the `expected_doc` argument of
+`_dispatch`/`execute_lisp`; only backend code can. A tool caller gets the same check by calling
+`system(assert_doc)` first, at the cost of one extra round trip.
+
+## Not yet run live (UNTESTED on LT 2027)
+
+Covered by unit tests only:
+
+- `entity(erase)` through `_.ERASE`, then `U` restoring the entity.
+- `redo` is refused because the dispatch command is said to clear the redo stack. Nobody has
+  measured that.
+- `timeout_not_dispatched` and `autocad_busy` from this code. `command_active` was verified live
+  on 2026-10-14, before the claim step existed.
+- Saving to a new `.dwg` without a false `save_unverified`.
 
 ## LT 2027 limits (measured)
 
