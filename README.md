@@ -15,7 +15,7 @@ has been fixed and covered by a test.
 ## Why start here instead of the original?
 
 1. **It doesn't claim work it didn't do.** The original can report "saved" when nothing was saved.
-   That happened on a real drawing. Here every save, DXF export and PDF plot is checked on disk
+   That happened on a real drawing. Here every save and DXF export is checked on disk
    before the assistant is told "done".
 2. **It costs less to run.** AI assistants are billed by how much they read. The original sends every
    result twice and every screenshot at full size. Here results are sent once, a screenshot costs
@@ -45,7 +45,7 @@ has been fixed and covered by a test.
 
 | Area | Original | This fork |
 |---|---|---|
-| Saving, DXF export, PDF | Reports success without checking. A failed save said "saved", and DXF export wrote no file at all | Checks the file on disk and reports failure if it isn't there |
+| Saving and DXF export | Reports success without checking. A failed save said "saved", and DXF export wrote no file at all | Checks the file on disk and reports failure if it isn't there |
 | Running cost | Every result sent twice; screenshots at full size | Sent once; screenshots capped at 1280 px (56% fewer tokens on a typical window) |
 | Timeouts | "Timed out" | Says whether the action never started (safe to retry) or may still finish (don't repeat it) |
 | Busy AutoCAD or wrong drawing | Can type into a running command or act on the wrong drawing | Refuses and says why |
@@ -56,6 +56,21 @@ has been fixed and covered by a test.
 
 Known limits are listed openly in [docs/known-issues.md](docs/known-issues.md). Error codes and
 when a retry is safe: [docs/error-model.md](docs/error-model.md).
+
+## What this made possible
+
+Real problems from daily drafting work that the original could not handle, and what happens now.
+
+| Before (original) | Now (this fork) |
+|---|---|
+| **PDF plotting silently did nothing.** The plot command was fed its answers in the wrong order, so the file path landed on the wrong question and no PDF appeared. There was no reliable way to batch-export drawings. | `drawing(plot_pdf)` sends AutoCAD LT 2027's real 18-step plot sequence, captured from a manual run. The included save-verification skill has the assistant confirm the PDF landed. Combined with drawing switching, the assistant can plot one open drawing after another. Currently set up for ARCH D landscape sheets. |
+| **The assistant couldn't move between open drawings.** You had to click the other tab yourself, every time. | `system(switch_doc)` switches with no click and confirms the switch by asking AutoCAD which drawing is active. |
+| **The assistant couldn't see the command line.** When a command stopped at a prompt or failed, you had to copy and paste the command history into the chat by hand. | `system(command_line)` reads the command line and its history directly, even while a command is waiting for input. |
+| **The assistant couldn't work on "the lines I selected".** Your selection in AutoCAD did not carry over, and describing one selection took four separate round trips. | Selection handoff: you select, and one call reports what's selected and edits exactly those objects. In the sessions that prompted it, 129 of 193 tool calls had been spent on this kind of back-and-forth. |
+| **"Saved" didn't mean saved.** A failed save reported success, and the drawing that was still open was the original. | Every save and DXF export is checked on disk. If the file isn't there, you're told. |
+
+Each fix is backed by tests, and the working rules the assistant follows are in [`skills/`](skills/),
+so a beginner doesn't need to know any of this to benefit from it.
 
 ## Contributing back upstream
 
@@ -331,21 +346,6 @@ The `mcp_dispatch.lsp` dispatcher is fully compatible with LT 2024+.
 ## Notable engineering
 
 - **[Switching drawings without a click](docs/investigations/2026-10-16-document-switching.md)** (2026-10-16). LT has no COM, refuses OPEN from LISP, and `vla-Activate` reports a switch that never happens. Synthetic Ctrl+Tab was disproved; `GetGUIThreadInfo` showed the Start tab's embedded Chromium widget holding keyboard focus. Fix: `WM_MDIACTIVATE` on the frame's `MDIClient`, confirmed by `DWGNAME`. Also closed a silent fall-through to the headless backend while Start was in front.
-
-## What's New in v3.1
-
-- **`execute_lisp`** — Run arbitrary AutoLISP code via temp file pattern. Turns the server from a fixed command set into an extensible automation platform.
-- **Undo / Redo** — Single-step undo and redo via `drawing` tool.
-- **Drawing open** — ~~Open existing `.dwg` files programmatically~~ **This did not work.** AutoCAD refuses OPEN from inside `(command ...)` for the same reason `drawing create` cannot use `_.NEW`: it would tear down the document whose LISP namespace is running the dispatcher. `(command ...)` returns no status, so the branch reported `{"ok": true, "payload": "opened: <path>"}` while opening nothing — confirmed against LT 2027, `DWGNAME` unchanged and no new tab. The branch now compares the active document against the requested path and returns `ok: false` naming the document it is still in. It succeeds only when the file is *already* the active document, which makes it a cheap way to confirm which document you are in. To change between drawings that are already open, use `system(switch_doc)`. To open a new one, open the file from the AutoCAD UI and load `mcp_dispatch.lsp` in it, or use the ezdxf backend to read the file without AutoCAD.
-- **Drawing create** — Now resets current drawing (erase all + purge) instead of `_.NEW`, preserving the LISP dispatcher namespace.
-- **Drawing save with path** — `save` with a `path` parameter uses SAVEAS; without path uses QSAVE. Both outcomes are now **measured, not asserted**: this branch used to answer `{"ok": true, "payload": "saved to: <path>"}` whether or not the file was written — confirmed live from a SAVEAS that had failed with the original document still active. SAVEAS renames the active document to the file it wrote, so the path form returns `ok: false` unless the document it ends in *is* that file; the no-path form reads `DBMOD` instead (0 after a successful save). A drawing that has never been saved is refused rather than left waiting on a filename prompt. A path given without a `.dwg` extension reports failure, since SAVEAS appends one.
-- **`save_as_dxf` writes via DXFOUT** — it used to call SAVEAS with a `DXF` format keyword, which on LT 2027 wrote **no file at all** while returning `ok: true`, and renamed the active document so that a later bare `save` (QSAVE) wrote DXF over the drawing. DXFOUT has neither problem: it writes the file and leaves the document alone. Because DXFOUT reports nothing on failure — pointed at a missing folder it returns without error and writes nothing — the export is gated on the file's timestamp moving, not on the file merely existing, so re-exporting over a stale DXF cannot be mistaken for a success. FILEDIA suppressed and restored.
-- **`get_variables` fix** — Respects the `names` parameter; returns requested variables with proper type handling.
-- **Polyline/leader fix** — Point arrays properly encoded via semicolon-delimited format.
-- **ESC prefix** — Sends 2x ESC before each dispatch to cancel stale pending commands from prior timeouts.
-- **UTF-8/cp1252 fallback** — Handles non-ASCII characters in LISP result files (AutoCAD writes Windows-1252).
-- **Configurable IPC timeout** — `AUTOCAD_MCP_IPC_TIMEOUT` env var (1–300 seconds, default 10).
-- **Thread-safe backend init** — `asyncio.Lock` prevents parallel initialization races.
 
 ## License
 
