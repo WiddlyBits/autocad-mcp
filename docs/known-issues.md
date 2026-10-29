@@ -10,10 +10,16 @@ UNTESTED.
 create verbs and `move`/`rotate`/`scale` return `{entity_type, handle, layer}`. The handle is
 only read from top-level `entity_id`; `data.handle` is ignored.
 
-**`mcp:ent-bbox-data` has no branch for some entity types** (DIMENSION, HATCH, and the type on
-one production drawing's border layer, 2026-08-15), so `bbox-by-layer` reports `bbox none` for
-them. Crossing-mode grid maps still draw them, because `ssget` sees geometry the bbox code cannot
-measure.
+**The crossing grid treats a solid HATCH as a filled region; AutoCAD does not.** Measured
+2026-10-29: `ssget "_C"` hits a solid hatch along its boundary and along its fill's internal
+triangulation edges, and misses windows inside it that touch neither. No group code describes
+that triangulation, so the Python grid marks the whole interior and the live grid marks a
+diagonal pattern. Snapshots of a drawing with a hatch differ in those rows only.
+
+**Live snapshots are not byte-identical to an ezdxf-generated golden.** Two causes, neither
+in the bbox code (2026-10-29, `bbox_types.dxf`, every `layer` line identical): AutoCAD writes
+`$EXTMIN`/`$EXTMAX` on open, so `extents-header` is set live and `none` from ezdxf; and it
+creates the layout's ID 1 viewport on open, which adds an unmeasured entity on layer `0`.
 
 **`mcp:in-model-space` has no call sites.** It wraps a thunk in `CTAB "Model"` and restores the
 tab. Use it only when the target is model space; a paper-space rebuild must not be wrapped.
@@ -45,6 +51,9 @@ between, and `REDO` sent through a dispatch.
   re-send) ran and printed "No pending commands", so the withdrawal held.
 - `drawing(save, path)` to a new `.dwg`: `ok`, no `save_unverified`; the file exists (563,020 bytes,
   `AC1032` header) and `DWGNAME` retargeted to it.
+- Bboxes for DIMENSION, HATCH and VIEWPORT (2026-10-29): a production sheet's floating viewport
+  on its border layer reads `exact true` with the hand-computed box, and `bbox_types.dxf`'s
+  `layer` lines match `bbox_types.snap` byte for byte in Model and Layout1.
 
 ## LT 2027 limits (measured)
 
