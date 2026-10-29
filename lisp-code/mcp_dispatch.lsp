@@ -17,6 +17,10 @@
 ;; IPC directory
 (setq *mcp-ipc-dir* "C:/temp/")
 
+;; Reported by ping. 2 = c:mcp-dispatch claims cmd_<id> by renaming it to
+;; run_<id> before dispatching (file_ipc.py gates timeout_not_dispatched on it).
+(setq *mcp-dispatcher-version* 2)
+
 ;; -----------------------------------------------------------------------
 ;; JSON-like output helpers (minimal, no external library)
 ;; -----------------------------------------------------------------------
@@ -169,10 +173,13 @@
 
 (defun mcp-dispatch-command (cmd-name params-json / result old-filedia)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
-  (cond
+  (if (not (= "" (getvar "CMDNAMES")))
+    (cons nil (strcat "{\"error\":\"command_active\",\"active\":\""
+                      (mcp-escape-string (getvar "CMDNAMES")) "\"}"))
+    (cond
     ;; --- Ping ---
     ((= cmd-name "ping")
-     (cons T "\"pong\""))
+     (cons T (strcat "{\"pong\":true,\"dispatcher\":" (itoa *mcp-dispatcher-version*) "}")))
 
     ;; --- Freehand LISP execution ---
     ((= cmd-name "execute-lisp")
@@ -418,9 +425,15 @@
     ((= cmd-name "pid-list-symbols")
      (mcp-cmd-pid-list-symbols params-json))
 
+    ;; --- System state snapshot ---
+    ((= cmd-name "system-snapshot")
+     (if (fboundp 'mcp:sys-snapshot)
+       (cons T (mcp:sys-snapshot))
+       (cons nil "mcp_probes.lsp not loaded")))
+
     ;; --- Unknown ---
     (t (cons nil (strcat "Unknown command: " cmd-name)))
-  )
+  ))
 )
 
 ;; -----------------------------------------------------------------------
@@ -560,7 +573,7 @@
   (cons T (strcat "{\"current_layer\":\"" name "\"}"))
 )
 
-(defun mcp-cmd-create-line (params / x1 y1 x2 y2 layer)
+(defun mcp-cmd-create-line (params / x1 y1 x2 y2 layer ed)
   (setq x1 (mcp-json-get-number params "x1"))
   (setq y1 (mcp-json-get-number params "y1"))
   (setq x2 (mcp-json-get-number params "x2"))
@@ -570,10 +583,12 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_LINE" (list x1 y1 0.0) (list x2 y2 0.0) "")
-  (cons T (strcat "{\"entity_type\":\"LINE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"LINE\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-circle (params / cx cy radius layer)
+(defun mcp-cmd-create-circle (params / cx cy radius layer ed)
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq radius (mcp-json-get-number params "radius"))
@@ -582,10 +597,12 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_CIRCLE" (list cx cy 0.0) radius)
-  (cons T (strcat "{\"entity_type\":\"CIRCLE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"CIRCLE\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-polyline (params / pts-str closed layer pairs pt-str cx cy)
+(defun mcp-cmd-create-polyline (params / pts-str closed layer pairs pt-str cx cy ed)
   (setq pts-str (mcp-json-get-string params "points_str"))
   (setq closed (mcp-json-get-string params "closed"))
   (setq layer (mcp-json-get-string params "layer"))
@@ -601,13 +618,14 @@
         (command (list cx cy 0.0))
       )
       (if (= closed "1") (command "_C") (command ""))
-      (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\""
-                      (cdr (assoc 5 (entget (entlast)))) "\"}"))
+      (setq ed (entget (entlast)))
+      (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
     )
   )
 )
 
-(defun mcp-cmd-create-rectangle (params / x1 y1 x2 y2 layer)
+(defun mcp-cmd-create-rectangle (params / x1 y1 x2 y2 layer ed)
   (setq x1 (mcp-json-get-number params "x1"))
   (setq y1 (mcp-json-get-number params "y1"))
   (setq x2 (mcp-json-get-number params "x2"))
@@ -617,10 +635,12 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_RECTANG" (list x1 y1 0.0) (list x2 y2 0.0))
-  (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"LWPOLYLINE\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-text (params / x y text height rotation layer)
+(defun mcp-cmd-create-text (params / x y text height rotation layer ed)
   (setq x (mcp-json-get-number params "x"))
   (setq y (mcp-json-get-number params "y"))
   (setq text (mcp-json-get-string params "text"))
@@ -633,7 +653,9 @@
     (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer))
   )
   (command "_TEXT" "J" "M" (list x y 0.0) height rotation text)
-  (cons T (strcat "{\"entity_type\":\"TEXT\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"TEXT\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
 (defun mcp-cmd-entity-count (params / layer count ent ent-data)
@@ -670,24 +692,21 @@
   (cons T (strcat "{\"entities\":[" entities "]}"))
 )
 
-(defun mcp-cmd-entity-erase (params / entity-id ent)
+(defun mcp-cmd-entity-erase (params / entity-id ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
-  (if (= entity-id "last")
+  (setq ent (if (= entity-id "last") (entlast) (handent entity-id)))
+  ;; An erased ename still resolves through handent; test entget, as entity-get does.
+  ;; Read it before the ERASE: entget on an erased entity returns nil.
+  (if (and ent (entget ent))
     (progn
-      (setq ent (entlast))
-      (if (and ent (entget ent))
-        (progn (command "_.ERASE" ent "") (cons T "\"erased last entity\""))
-        (cons nil "No entity to erase")))
-    (progn
-      (setq ent (handent entity-id))
-      ;; An erased ename still resolves through handent; test entget, as entity-get does.
-      (if (and ent (entget ent))
-        (progn (command "_.ERASE" ent "") (cons T (strcat "\"erased " entity-id "\"")))
-        (cons nil (strcat "Entity not found: " entity-id))))
-  )
+      (setq ed (entget ent))
+      (command "_.ERASE" ent "")
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
+    (cons nil (if (= entity-id "last") "No entity to erase" (strcat "Entity not found: " entity-id))))
 )
 
-(defun mcp-cmd-entity-move (params / entity-id dx dy ent)
+(defun mcp-cmd-entity-move (params / entity-id dx dy ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq dx (mcp-json-get-number params "dx"))
   (setq dy (mcp-json-get-number params "dy"))
@@ -698,7 +717,9 @@
   (if ent
     (progn
       (command "_.MOVE" ent "" '(0 0 0) (list dx dy 0))
-      (cons T "\"moved\""))
+      (setq ed (entget ent))
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
     (cons nil "Entity not found")
   )
 )
@@ -873,7 +894,7 @@
 
 ;; --- Additional entity creation ---
 
-(defun mcp-cmd-create-arc (params / cx cy radius sa ea layer)
+(defun mcp-cmd-create-arc (params / cx cy radius sa ea layer ed)
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq radius (mcp-json-get-number params "radius"))
@@ -882,10 +903,12 @@
   (setq layer (mcp-json-get-string params "layer"))
   (if layer (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer)))
   (command "_ARC" "_C" (list cx cy 0.0) (list (+ cx radius) cy 0.0) "_A" (- ea sa))
-  (cons T (strcat "{\"entity_type\":\"ARC\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"ARC\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-ellipse (params / cx cy mx my ratio layer)
+(defun mcp-cmd-create-ellipse (params / cx cy mx my ratio layer ed)
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq mx (mcp-json-get-number params "major_x"))
@@ -894,10 +917,12 @@
   (setq layer (mcp-json-get-string params "layer"))
   (if layer (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer)))
   (command "_ELLIPSE" "_C" (list cx cy 0.0) (list mx my 0.0) ratio)
-  (cons T (strcat "{\"entity_type\":\"ELLIPSE\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"ELLIPSE\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
-(defun mcp-cmd-create-mtext (params / x y width text height layer)
+(defun mcp-cmd-create-mtext (params / x y width text height layer ed)
   (setq x (mcp-json-get-number params "x"))
   (setq y (mcp-json-get-number params "y"))
   (setq width (mcp-json-get-number params "width"))
@@ -907,7 +932,9 @@
   (setq layer (mcp-json-get-string params "layer"))
   (if layer (progn (ensure_layer_exists layer "white" "CONTINUOUS") (set_current_layer layer)))
   (command "_MTEXT" (list x y 0.0) "_H" height "_W" width text "")
-  (cons T (strcat "{\"entity_type\":\"MTEXT\",\"handle\":\"" (cdr (assoc 5 (entget (entlast)))) "\"}"))
+  (setq ed (entget (entlast)))
+  (cons T (strcat "{\"entity_type\":\"MTEXT\",\"handle\":\"" (cdr (assoc 5 ed))
+                  "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}"))
 )
 
 (defun mcp-cmd-create-hatch (params / entity-id pattern ent)
@@ -1024,26 +1051,34 @@
   )
 )
 
-(defun mcp-cmd-entity-rotate (params / entity-id cx cy angle ent)
+(defun mcp-cmd-entity-rotate (params / entity-id cx cy angle ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq angle (mcp-json-get-number params "angle"))
   (if (= entity-id "last") (setq ent (entlast)) (setq ent (handent entity-id)))
   (if ent
-    (progn (command "_.ROTATE" ent "" (list cx cy 0) angle) (cons T "\"rotated\""))
+    (progn
+      (command "_.ROTATE" ent "" (list cx cy 0) angle)
+      (setq ed (entget ent))
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
     (cons nil "Entity not found")
   )
 )
 
-(defun mcp-cmd-entity-scale (params / entity-id cx cy factor ent)
+(defun mcp-cmd-entity-scale (params / entity-id cx cy factor ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq factor (mcp-json-get-number params "factor"))
   (if (= entity-id "last") (setq ent (entlast)) (setq ent (handent entity-id)))
   (if ent
-    (progn (command "_.SCALE" ent "" (list cx cy 0) factor) (cons T "\"scaled\""))
+    (progn
+      (command "_.SCALE" ent "" (list cx cy 0) factor)
+      (setq ed (entget ent))
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
     (cons nil "Entity not found")
   )
 )
@@ -1406,15 +1441,20 @@
 ;; -----------------------------------------------------------------------
 
 (defun c:mcp-dispatch ( / cmd-files cmd-file json-text request-id cmd-name params-str result result-file)
-  "Find pending command file, dispatch, write result."
+  "Find pending command file, claim it, dispatch, write result."
   ;; Find first pending command file
   (setq cmd-files (vl-directory-files *mcp-ipc-dir* "autocad_mcp_cmd_*.json" 1))
   (if (not cmd-files)
     (progn (princ "\nMCP: No pending commands") (princ))
     (progn
-      ;; Process first command
-      (setq cmd-file (strcat *mcp-ipc-dir* (car cmd-files)))
-      (setq json-text (mcp-read-file-lines cmd-file))
+      ;; Claim: rename cmd_<id> to run_<id> before anything runs. Python's
+      ;; timeout path deletes cmd_<id>; if that delete succeeds the command was
+      ;; never claimed and cannot have applied. A failed rename means Python
+      ;; already withdrew it, so do nothing.
+      (setq cmd-file (strcat *mcp-ipc-dir* "autocad_mcp_run_" (substr (car cmd-files) 17)))
+      (setq json-text
+        (if (vl-file-rename (strcat *mcp-ipc-dir* (car cmd-files)) cmd-file)
+          (mcp-read-file-lines cmd-file)))
 
       (if (not json-text)
         (princ "\nMCP: Cannot read command file")

@@ -55,7 +55,7 @@ class TestEraseIsUndoable:
 
     def test_erase_uses_the_erase_command(self):
         body = _defun_body(_dispatch_source(), "mcp-cmd-entity-erase")
-        assert body.count('(command "_.ERASE" ent "")') == 2
+        assert body.count('(command "_.ERASE" ent "")') == 1
         assert "(entdel" not in strip_lisp(body)
 
 

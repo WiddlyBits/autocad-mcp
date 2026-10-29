@@ -82,6 +82,9 @@ class FileIPCBackend(AutoCADBackend):
         self._screenshot_provider = None
         self._lock = asyncio.Lock()  # Single in-flight command
         self._status_file = self._ipc_dir / "mcp_status.txt"
+        # Set from the ping reply. >= 2 means LISP claims cmd files by renaming
+        # them before dispatch, so a timeout can tell "never started" apart.
+        self._dispatcher_version: int = 1
 
     @property
     def name(self) -> str:
@@ -128,6 +131,10 @@ class FileIPCBackend(AutoCADBackend):
 
         # Ping the dispatcher to verify it's loaded
         result = await self._dispatch("ping", {})
+        if result.ok:
+            # Old dispatchers reply with a bare "pong" and no version.
+            payload = result.payload
+            self._dispatcher_version = payload.get("dispatcher", 1) if isinstance(payload, dict) else 1
         if not result.ok:
             lisp_path = str(LISP_DIR / "mcp_dispatch.lsp").replace("\\", "/")
             return CommandResult(
@@ -177,13 +184,26 @@ class FileIPCBackend(AutoCADBackend):
         log.info("hwnd_reacquired", hwnd=self._hwnd, command_hwnd=self._command_hwnd)
         return True
 
-    async def _dispatch(self, command: str, params: dict) -> CommandResult:
+    async def _dispatch(self, command: str, params: dict, expected_doc: str | None = None) -> CommandResult:
         """Send a command via file IPC and wait for result."""
+        if expected_doc is not None:
+            pre = await self.assert_doc(expected_doc)
+            if not pre.ok:
+                return pre
         async with self._lock:
             return await self._dispatch_unlocked(command, params)
 
-    async def _dispatch_unlocked(self, command: str, params: dict) -> CommandResult:
+    async def _dispatch_unlocked(self, command: str, params: dict, _retried: bool = False) -> CommandResult:
         """Core IPC logic (must be called under _lock)."""
+        result = await self._dispatch_once(command, params)
+        if result.error != "timeout_not_dispatched" or _retried:
+            return result
+        # The command never started, so re-sending cannot double-apply it.
+        log.warning("timeout_not_dispatched_retry", command=command)
+        return await self._dispatch_unlocked(command, params, _retried=True)
+
+    async def _dispatch_once(self, command: str, params: dict) -> CommandResult:
+        """Write one command file, trigger the dispatcher, and wait for its result."""
         request_id = uuid.uuid4().hex[:12]
         cmd_file = self._ipc_dir / f"autocad_mcp_cmd_{request_id}.json"
         result_file = self._ipc_dir / f"autocad_mcp_result_{request_id}.json"
@@ -257,6 +277,12 @@ class FileIPCBackend(AutoCADBackend):
                         pass  # File may be partially written, retry
                 await asyncio.sleep(POLL_INTERVAL)
 
+            if self._dispatcher_version >= 2 and self._withdraw(cmd_file):
+                return CommandResult(
+                    ok=False,
+                    error="timeout_not_dispatched",
+                    payload={"may_have_applied": False, "request_id": request_id},
+                )
             if command in _MUTATING_COMMANDS:
                 return CommandResult(
                     ok=False,
@@ -284,11 +310,24 @@ class FileIPCBackend(AutoCADBackend):
         """
         found: list[Path] = []
         try:
-            for pattern in ("autocad_mcp_cmd_*.json", "autocad_mcp_result_*.json"):
+            for pattern in ("autocad_mcp_cmd_*.json", "autocad_mcp_run_*.json", "autocad_mcp_result_*.json"):
                 found.extend(self._ipc_dir.glob(pattern))
         except OSError:
             pass
         return found
+
+    @staticmethod
+    def _withdraw(cmd_file: Path) -> bool:
+        """Delete an unclaimed command file. True means LISP never claimed it.
+
+        The v2 dispatcher renames cmd_<id> to run_<id> before running anything,
+        so a cmd file that still exists to be deleted cannot have applied.
+        """
+        try:
+            cmd_file.unlink()
+            return True
+        except OSError:
+            return False
 
     def _find_command_line_hwnd(self) -> int | None:
         """Find AutoCAD's MDIClient child window for command routing."""
@@ -465,17 +504,40 @@ class FileIPCBackend(AutoCADBackend):
 
     # --- Freehand LISP execution ---
 
-    async def execute_lisp(self, code: str) -> CommandResult:
+    async def execute_lisp(self, code: str, expected_doc: str | None = None) -> CommandResult:
         """Execute arbitrary AutoLISP code via temp file.
 
         File persists for session; cleaned up by _cleanup_stale_files().
+        expected_doc: when provided, assert_doc() runs before the IPC file is written.
         """
         request_id = uuid.uuid4().hex[:12]
         code_file = self._ipc_dir / f"autocad_mcp_lisp_{request_id}.lsp"
         code_file.write_text(code, encoding="utf-8")
         return await self._dispatch("execute-lisp", {
             "code_file": str(code_file).replace("\\", "/")
-        })
+        }, expected_doc=expected_doc)
+
+    async def assert_doc(self, expected_name: str) -> CommandResult:
+        """Verify the active drawing matches expected_name before a batch.
+
+        Calls (mcp:assert-doc ...) from mcp_probes.lsp.
+        Returns ok:True  when names match (case-insensitive, per the LISP impl).
+        Returns ok:False with error "wrong_doc" when they differ, carrying
+        {"expected": ..., "actual": <raw LISP payload>} in payload.
+        Propagates any execute_lisp error (e.g. probes not loaded) unchanged.
+        """
+        # Backslash first, so the quote escapes are not themselves doubled.
+        lisp_name = expected_name.replace("\\", "\\\\").replace('"', '\\"')
+        result = await self.execute_lisp(f'(mcp:assert-doc "{lisp_name}")')
+        if not result.ok:
+            return result
+        if result.payload == "OK":
+            return CommandResult(ok=True, payload={"doc": expected_name})
+        return CommandResult(
+            ok=False,
+            error="wrong_doc",
+            payload={"expected": expected_name, "actual": str(result.payload)},
+        )
 
     # --- Entity operations ---
 

@@ -185,3 +185,73 @@ class TestLispDoesNotDivergeFromTheProbes:
     def test_probes_also_treat_group_50_as_radians(self):
         probes = (DISPATCH_LSP.parent / "mcp_probes.lsp").read_text(encoding="utf-8")
         assert "(/ (* 180.0 (mcp:group data 50 0.0)) pi)" in probes
+
+
+#: Every create verb, with the arguments to call the ezdxf method with.
+CREATES = {
+    "mcp-cmd-create-line": ("create_line", (0, 0, 1, 1)),
+    "mcp-cmd-create-circle": ("create_circle", (0, 0, 1)),
+    "mcp-cmd-create-polyline": ("create_polyline", ([[0, 0], [1, 0], [1, 1]],)),
+    "mcp-cmd-create-rectangle": ("create_rectangle", (0, 0, 1, 1)),
+    "mcp-cmd-create-arc": ("create_arc", (0, 0, 1, 0, 90)),
+    "mcp-cmd-create-ellipse": ("create_ellipse", (0, 0, 2, 0, 0.5)),
+    "mcp-cmd-create-mtext": ("create_mtext", (0, 0, 10, "x")),
+    "mcp-cmd-create-text": ("create_text", (0, 0, "x")),
+}
+
+
+class TestCreateReportsLayer:
+    """A create call names the layer the entity actually landed on, so the
+    caller does not spend an entity(get) to find out. Both backends."""
+
+    @pytest.mark.parametrize("defun", sorted(CREATES))
+    def test_lisp_returns_layer(self, defun):
+        body = _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), defun)
+        assert '"\\",\\"layer\\":\\""' in body
+        assert "(assoc 8 ed)" in body
+
+    @pytest.mark.parametrize("defun", sorted(CREATES))
+    async def test_ezdxf_returns_layer(self, defun):
+        method, args = CREATES[defun]
+        backend = EzdxfBackend()
+        await backend.initialize()
+        result = await getattr(backend, method)(*args, layer="L1")
+        assert result.ok, result.error
+        assert result.payload["layer"] == "L1"
+
+
+#: Every in-place edit verb, with the arguments after the handle.
+EDITS = {
+    "mcp-cmd-entity-move": ("entity_move", (5, 5)),
+    "mcp-cmd-entity-rotate": ("entity_rotate", (0, 0, 90)),
+    "mcp-cmd-entity-scale": ("entity_scale", (0, 0, 2)),
+    "mcp-cmd-entity-erase": ("entity_erase", ()),
+}
+
+
+class TestEditReportsEntity:
+    """move/rotate/scale/erase return the same {entity_type, handle, layer} as the
+    create verbs, so the caller learns what it touched without an entity(get).
+    Both backends."""
+
+    @pytest.mark.parametrize("defun", sorted(EDITS))
+    def test_lisp_returns_entity(self, defun):
+        body = _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), defun)
+        for group in ("(assoc 0 ed)", "(assoc 5 ed)", "(assoc 8 ed)"):
+            assert group in body
+        assert '"\\",\\"layer\\":\\""' in body
+
+    def test_lisp_erase_reads_before_erasing(self):
+        body = _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), "mcp-cmd-entity-erase")
+        assert body.index("(setq ed (entget ent))") < body.index('(command "_.ERASE"')
+
+    @pytest.mark.parametrize("defun", sorted(EDITS))
+    async def test_ezdxf_returns_entity(self, defun):
+        method, args = EDITS[defun]
+        backend = EzdxfBackend()
+        await backend.initialize()
+        created = await backend.create_circle(0, 0, 1, layer="L1")
+        handle = created.payload["handle"]
+        result = await getattr(backend, method)(handle, *args)
+        assert result.ok, result.error
+        assert result.payload == {"entity_type": "CIRCLE", "handle": handle, "layer": "L1"}

@@ -157,18 +157,18 @@ class EzdxfBackend(AutoCADBackend):
     async def create_line(self, x1, y1, x2, y2, layer=None) -> CommandResult:
         self._ensure_layer(layer)
         e = self._msp.add_line((x1, y1), (x2, y2), dxfattribs={"layer": layer or "0"})
-        return CommandResult(ok=True, payload={"entity_type": "LINE", "handle": e.dxf.handle})
+        return CommandResult(ok=True, payload={"entity_type": "LINE", "handle": e.dxf.handle, "layer": e.dxf.layer})
 
     async def create_circle(self, cx, cy, radius, layer=None) -> CommandResult:
         self._ensure_layer(layer)
         e = self._msp.add_circle((cx, cy), radius, dxfattribs={"layer": layer or "0"})
-        return CommandResult(ok=True, payload={"entity_type": "CIRCLE", "handle": e.dxf.handle})
+        return CommandResult(ok=True, payload={"entity_type": "CIRCLE", "handle": e.dxf.handle, "layer": e.dxf.layer})
 
     async def create_polyline(self, points, closed=False, layer=None) -> CommandResult:
         self._ensure_layer(layer)
         pts = [(p[0], p[1]) for p in points]
         e = self._msp.add_lwpolyline(pts, close=closed, dxfattribs={"layer": layer or "0"})
-        return CommandResult(ok=True, payload={"entity_type": "LWPOLYLINE", "handle": e.dxf.handle})
+        return CommandResult(ok=True, payload={"entity_type": "LWPOLYLINE", "handle": e.dxf.handle, "layer": e.dxf.layer})
 
     async def create_rectangle(self, x1, y1, x2, y2, layer=None) -> CommandResult:
         pts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
@@ -177,7 +177,7 @@ class EzdxfBackend(AutoCADBackend):
     async def create_arc(self, cx, cy, radius, start_angle, end_angle, layer=None) -> CommandResult:
         self._ensure_layer(layer)
         e = self._msp.add_arc((cx, cy), radius, start_angle, end_angle, dxfattribs={"layer": layer or "0"})
-        return CommandResult(ok=True, payload={"entity_type": "ARC", "handle": e.dxf.handle})
+        return CommandResult(ok=True, payload={"entity_type": "ARC", "handle": e.dxf.handle, "layer": e.dxf.layer})
 
     async def create_ellipse(self, cx, cy, major_x, major_y, ratio, layer=None) -> CommandResult:
         self._ensure_layer(layer)
@@ -185,7 +185,7 @@ class EzdxfBackend(AutoCADBackend):
             (cx, cy), major_axis=(major_x - cx, major_y - cy, 0), ratio=ratio,
             dxfattribs={"layer": layer or "0"},
         )
-        return CommandResult(ok=True, payload={"entity_type": "ELLIPSE", "handle": e.dxf.handle})
+        return CommandResult(ok=True, payload={"entity_type": "ELLIPSE", "handle": e.dxf.handle, "layer": e.dxf.layer})
 
     async def create_mtext(self, x, y, width, text, height=2.5, layer=None) -> CommandResult:
         self._ensure_layer(layer)
@@ -195,7 +195,7 @@ class EzdxfBackend(AutoCADBackend):
             "width": width,
             "layer": layer or "0",
         })
-        return CommandResult(ok=True, payload={"entity_type": "MTEXT", "handle": e.dxf.handle})
+        return CommandResult(ok=True, payload={"entity_type": "MTEXT", "handle": e.dxf.handle, "layer": e.dxf.layer})
 
     async def entity_list(self, layer=None) -> CommandResult:
         entities = []
@@ -322,8 +322,9 @@ class EzdxfBackend(AutoCADBackend):
                     e = entities[-1]
                 else:
                     return CommandResult(ok=False, error=f"Entity {entity_id} not found")
+            payload = {"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer}
             self._msp.delete_entity(e)
-            return CommandResult(ok=True, payload={"erased": entity_id})
+            return CommandResult(ok=True, payload=payload)
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 
@@ -345,7 +346,7 @@ class EzdxfBackend(AutoCADBackend):
             if e is None:
                 return CommandResult(ok=False, error=f"Entity {entity_id} not found")
             e.translate(dx, dy, 0)
-            return CommandResult(ok=True, payload={"moved": entity_id})
+            return CommandResult(ok=True, payload={"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer})
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 
@@ -360,7 +361,7 @@ class EzdxfBackend(AutoCADBackend):
             e.translate(-cx, -cy, 0)
             e.transform(m)
             e.translate(cx, cy, 0)
-            return CommandResult(ok=True, payload={"rotated": entity_id})
+            return CommandResult(ok=True, payload={"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer})
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 
@@ -374,7 +375,7 @@ class EzdxfBackend(AutoCADBackend):
             e.translate(-cx, -cy, 0)
             e.transform(m)
             e.translate(cx, cy, 0)
-            return CommandResult(ok=True, payload={"scaled": entity_id})
+            return CommandResult(ok=True, payload={"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer})
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 
@@ -612,7 +613,7 @@ class EzdxfBackend(AutoCADBackend):
             "rotation": rotation,
             "layer": layer or "0",
         })
-        return CommandResult(ok=True, payload={"entity_type": "TEXT", "handle": e.dxf.handle})
+        return CommandResult(ok=True, payload={"entity_type": "TEXT", "handle": e.dxf.handle, "layer": e.dxf.layer})
 
     async def create_dimension_linear(self, x1, y1, x2, y2, dim_x, dim_y) -> CommandResult:
         try:
