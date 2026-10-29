@@ -425,6 +425,86 @@
 ;; Command implementations
 ;; -----------------------------------------------------------------------
 
+(defun mcp-fmt-point (pt)
+  "Format a point list as a JSON [x,y] array, or null."
+  (if pt
+    (strcat "[" (rtos (car pt) 2 6) "," (rtos (cadr pt) 2 6) "]")
+    "null"
+  )
+)
+
+(defun mcp-collect-points (ent-data / out item)
+  "Collect every group-10 point in ent-data as a JSON array body.
+   LWPOLYLINE repeats group 10 once per vertex, so assoc alone finds only the
+   first; this walks the whole list."
+  (setq out "")
+  (foreach item ent-data
+    (if (= (car item) 10)
+      (setq out (if (> (strlen out) 0)
+                  (strcat out "," (mcp-fmt-point (cdr item)))
+                  (mcp-fmt-point (cdr item))))
+    )
+  )
+  out
+)
+
+(defun mcp-group (ent-data code dflt / hit)
+  "One group code out of an entget list, or dflt when it is absent."
+  (if (setq hit (assoc code ent-data)) (cdr hit) dflt)
+)
+
+(defun mcp-rad2deg (r)
+  "entget hands angles back in RADIANS, whatever the DXF file stores.
+   ezdxf hands back degrees. Every angle this file emits therefore has to be
+   converted, or the two backends answer the same question in different units
+   and nothing downstream can tell which one it got. tests/test_entity_parity.py
+   pins that."
+  (/ (* 180.0 (if r r 0.0)) pi)
+)
+
+(defun mcp-fmt-num (v) (rtos (float (if v v 0.0)) 2 6))
+
+(defun mcp-mtext-text (ent-data / out item)
+  "MTEXT splits long content across repeated group 3 chunks and puts the tail
+   in group 1. Reading group 1 alone truncates every long note in the drawing
+   to its last fragment, which is worse than reporting nothing - it looks like
+   an answer. ezdxf's .text returns the whole string."
+  (setq out "")
+  (foreach item ent-data (if (= (car item) 3) (setq out (strcat out (cdr item)))))
+  (strcat out (mcp-group ent-data 1 ""))
+)
+
+(defun mcp-polyline-vertices (ent-data / ent vdata out pt)
+  "A heavy POLYLINE keeps its vertices as separate VERTEX sub-entities that
+   follow the header and end at SEQEND, so this is NOT the LWPOLYLINE case with
+   a different name: there are no repeated group 10s on the header to collect,
+   and mcp-collect-points returns an empty list for it. Traversal is the only
+   way in without ActiveX."
+  (setq out "")
+  (setq ent (entnext (cdr (assoc -1 ent-data))))
+  (while (and ent (setq vdata (entget ent)) (= (mcp-group vdata 0 "") "VERTEX"))
+    (setq pt (mcp-group vdata 10 nil))
+    (if pt
+      (setq out (if (> (strlen out) 0)
+                  (strcat out "," (mcp-fmt-point pt))
+                  (mcp-fmt-point pt))))
+    (setq ent (entnext ent))
+  )
+  out
+)
+
+(defun mcp-drawing-extents ( / emin emax)
+  "Drawing extents as JSON numbers, or null when the drawing is empty.
+   AutoCAD carries +-1e20 sentinels rather than real extents until something
+   is drawn, so those are reported as null instead of as absurd coordinates."
+  (setq emin (getvar "EXTMIN"))
+  (setq emax (getvar "EXTMAX"))
+  (if (or (null emin) (null emax) (> (abs (car emin)) 1e19) (> (abs (car emax)) 1e19))
+    "null"
+    (strcat "{\"min\":" (mcp-fmt-point emin) ",\"max\":" (mcp-fmt-point emax) "}")
+  )
+)
+
 (defun mcp-cmd-drawing-info ( / count layers layer-list)
   "Return drawing info: entity count, layers, extents."
   (setq count 0)
@@ -442,7 +522,9 @@
     )
     (setq layers (tblnext "LAYER"))
   )
-  (cons T (strcat "{\"entity_count\":" (itoa count) ",\"layers\":[" layer-list "]}"))
+  (cons T (strcat "{\"entity_count\":" (itoa count)
+                  ",\"layers\":[" layer-list "]"
+                  ",\"extents\":" (mcp-drawing-extents) "}"))
 )
 
 (defun mcp-cmd-layer-list ( / layers layer-list name)
@@ -595,7 +677,9 @@
         (cons nil "No entity to erase")))
     (progn
       (setq ent (handent entity-id))
-      (if ent (progn (entdel ent) (cons T (strcat "\"erased " entity-id "\"")))
+      ;; entdel on an erased ename un-erases it, so test entget, as entity-get does.
+      (if (and ent (entget ent))
+        (progn (entdel ent) (cons T (strcat "\"erased " entity-id "\"")))
         (cons nil (strcat "Entity not found: " entity-id))))
   )
 )
@@ -847,7 +931,8 @@
     (setq ent (entlast))
     (setq ent (handent entity-id))
   )
-  (if (not ent)
+  ;; handent hands back an ename for an erased entity; only entget says it is gone.
+  (if (not (and ent (entget ent)))
     (cons nil (strcat "Entity not found: " entity-id))
     (progn
       (setq ent-data (entget ent))
@@ -855,16 +940,64 @@
       (setq handle (cdr (assoc 5 ent-data)))
       (setq elayer (cdr (assoc 8 ent-data)))
       (setq result (strcat "{\"type\":\"" etype "\",\"handle\":\"" handle "\",\"layer\":\"" elayer "\""))
-      ;; Add type-specific info
+      ;; Type-specific geometry. Everything here is read straight out of the
+      ;; DXF group codes -- no ActiveX, since object calls are what hang the
+      ;; dispatcher on LT. Without these fields, "where is this thing" has no
+      ;; cheap answer and the only way to find out is to look at a screenshot.
       (cond
         ((= etype "LINE")
          (setq result (strcat result
-           ",\"start\":[" (rtos (car (cdr (assoc 10 ent-data))) 2 6) "," (rtos (cadr (cdr (assoc 10 ent-data))) 2 6) "]"
-           ",\"end\":[" (rtos (car (cdr (assoc 11 ent-data))) 2 6) "," (rtos (cadr (cdr (assoc 11 ent-data))) 2 6) "]")))
+           ",\"start\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"end\":" (mcp-fmt-point (cdr (assoc 11 ent-data))))))
         ((= etype "CIRCLE")
          (setq result (strcat result
-           ",\"center\":[" (rtos (car (cdr (assoc 10 ent-data))) 2 6) "," (rtos (cadr (cdr (assoc 10 ent-data))) 2 6) "]"
+           ",\"center\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
            ",\"radius\":" (rtos (cdr (assoc 40 ent-data)) 2 6))))
+        ((= etype "ARC")
+         (setq result (strcat result
+           ",\"center\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"radius\":" (rtos (cdr (assoc 40 ent-data)) 2 6)
+           ;; Degrees, not the radians entget returns -- see mcp-rad2deg.
+           ",\"start_angle\":" (mcp-fmt-num (mcp-rad2deg (mcp-group ent-data 50 0.0)))
+           ",\"end_angle\":" (mcp-fmt-num (mcp-rad2deg (mcp-group ent-data 51 0.0))))))
+        ((= etype "ELLIPSE")
+         (setq result (strcat result
+           ",\"center\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"major_axis\":" (mcp-fmt-point (cdr (assoc 11 ent-data)))
+           ",\"ratio\":" (rtos (cdr (assoc 40 ent-data)) 2 6))))
+        ((= etype "POINT")
+         (setq result (strcat result
+           ",\"location\":" (mcp-fmt-point (cdr (assoc 10 ent-data))))))
+        ((= etype "LWPOLYLINE")
+         (setq result (strcat result
+           ",\"vertices\":[" (mcp-collect-points ent-data) "]"
+           ",\"closed\":" (if (= 1 (logand 1 (cond ((cdr (assoc 70 ent-data))) (0)))) "true" "false"))))
+        ;; POLYLINE is not LWPOLYLINE under another name -- its vertices are
+        ;; separate sub-entities. One production drawing had 734, and without this
+        ;; branch every one reported type/handle/layer and no geometry at all.
+        ((= etype "POLYLINE")
+         (setq result (strcat result
+           ",\"vertices\":[" (mcp-polyline-vertices ent-data) "]"
+           ",\"closed\":" (if (= 1 (logand 1 (mcp-group ent-data 70 0))) "true" "false"))))
+        ((member etype (list "TEXT" "ATTDEF"))
+         (setq result (strcat result
+           ",\"text\":\"" (mcp-escape-string (cond ((cdr (assoc 1 ent-data))) (""))) "\""
+           ",\"insert\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"height\":" (rtos (cond ((cdr (assoc 40 ent-data))) (0.0)) 2 6)
+           ",\"rotation\":" (mcp-fmt-num (mcp-rad2deg (mcp-group ent-data 50 0.0))))))
+        ((= etype "MTEXT")
+         (setq result (strcat result
+           ",\"text\":\"" (mcp-escape-string (mcp-mtext-text ent-data)) "\""
+           ",\"insert\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"height\":" (rtos (cond ((cdr (assoc 40 ent-data))) (0.0)) 2 6)
+           ",\"rotation\":" (mcp-fmt-num (mcp-rad2deg (mcp-group ent-data 50 0.0))))))
+        ((= etype "INSERT")
+         (setq result (strcat result
+           ",\"name\":\"" (mcp-escape-string (cdr (assoc 2 ent-data))) "\""
+           ",\"insert\":" (mcp-fmt-point (cdr (assoc 10 ent-data)))
+           ",\"xscale\":" (rtos (cond ((cdr (assoc 41 ent-data))) (1.0)) 2 6)
+           ",\"yscale\":" (rtos (cond ((cdr (assoc 42 ent-data))) (1.0)) 2 6)
+           ",\"rotation\":" (mcp-fmt-num (mcp-rad2deg (mcp-group ent-data 50 0.0))))))
       )
       (setq result (strcat result "}"))
       (cons T result)
