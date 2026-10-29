@@ -27,15 +27,14 @@ origin    https://github.com/WiddlyBits/autocad-mcp.git   <- Gianni's fork, push
 upstream  https://github.com/puran-water/autocad-mcp.git  <- author's repo, pull only
 ```
 
-- **`main` and every feature branch track `origin`.** `main` tracked `upstream/main` until
-  2026-08-18; it was retargeted so a bare `git push` from `main` reaches the fork instead of
-  403ing against `upstream`. Pushing to `upstream` still always 403s — the credential
+- **`main` and every feature branch track `origin`**, so a bare `git push` from `main` reaches
+  the fork. Pushing to `upstream` always 403s — the credential
   authenticates as WiddlyBits, which has no write bit there.
 - **A bare `git pull` on `main` now takes from the fork, not the author.** To take upstream's
-  changes, name it: `git pull upstream main`. `main` is 26 commits ahead of `upstream/main`
-  as of 2026-08-18, so that merge is a real event, not a fast-forward.
-- **A github.com credential persists in Git Credential Manager** (Gianni signed in 2026-08-13).
-  Pushes complete unattended with no dialog — verified 2026-08-14 and 2026-08-15. Foreground is
+  changes, name it: `git pull upstream main`. `main` is far ahead of `upstream/main`
+  (`git rev-list --count upstream/main..main`), so that merge is a real event, not a fast-forward.
+- **A github.com credential persists in Git Credential Manager.** Pushes complete unattended
+  with no dialog (dated evidence: `autocad-mcp-repo-push-access` memory). Foreground is
   fine in this regime; backgrounding is only needed if the credential lapses.
 - **Tell which regime you are in before pushing, without popping a dialog:**
   `GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=echo git push --dry-run origin <branch>`. Exit 0 means a
