@@ -59,6 +59,20 @@ class TestEraseIsUndoable:
         assert "(entdel" not in strip_lisp(body)
 
 
+class TestFiledialogStateIsRestored:
+    """save-as and open suppress the file dialog for one command, then put back
+    the user's own FILEDIA rather than forcing it to 1."""
+
+    @pytest.mark.parametrize("cmd", ["drawing-save", "drawing-open"])
+    def test_prior_filedia_is_restored(self, cmd):
+        text = _dispatch_source()
+        branch = text[text.index(f'((= cmd-name "{cmd}")'):]
+        branch = branch[: branch.index("((= cmd-name", 1)]
+        assert '(setq old-filedia (getvar "FILEDIA"))' in branch
+        assert '(setvar "FILEDIA" old-filedia)' in branch
+        assert '(setvar "FILEDIA" 1)' not in branch
+
+
 def _backend(tmp_path) -> FileIPCBackend:
     backend = FileIPCBackend()
     backend._ipc_dir = tmp_path

@@ -167,7 +167,7 @@
 ;; Command dispatcher — WHITELIST ONLY, no eval
 ;; -----------------------------------------------------------------------
 
-(defun mcp-dispatch-command (cmd-name params-json / result)
+(defun mcp-dispatch-command (cmd-name params-json / result old-filedia)
   "Dispatch a command by name. Returns (ok . payload-or-error)."
   (cond
     ;; --- Ping ---
@@ -303,9 +303,10 @@
        (setq path (mcp-json-get-string params-json "path"))
        (if (and path (> (strlen path) 0))
          (progn
+           (setq old-filedia (getvar "FILEDIA"))
            (setvar "FILEDIA" 0)
            (command "_.SAVEAS" "" path)
-           (setvar "FILEDIA" 1)
+           (setvar "FILEDIA" old-filedia)
            (cons T (strcat "\"saved to: " (mcp-escape-string path) "\"")))
          (progn (command "_.QSAVE") (cons T "\"saved\"")))))
 
@@ -325,9 +326,10 @@
        (setq path (mcp-json-get-string params-json "path"))
        (if path
          (progn
+           (setq old-filedia (getvar "FILEDIA"))
            (setvar "FILEDIA" 0)
            (command "_.OPEN" path)
-           (setvar "FILEDIA" 1)
+           (setvar "FILEDIA" old-filedia)
            (cons T (strcat "\"opened: " (mcp-escape-string path) "\"")))
          (cons nil "Path required"))))
 
