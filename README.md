@@ -1,27 +1,68 @@
-# AutoCAD MCP Server
+# AutoCAD MCP Server: production-hardened fork
 
 [![CI](https://github.com/WiddlyBits/autocad-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WiddlyBits/autocad-mcp/actions/workflows/ci.yml)
 
-MCP server for AutoCAD LT automation and headless DXF generation.
+**Let an AI assistant like Claude work in AutoCAD LT for you, and trust what it tells you.**
 
-## About this fork
+This is an improved version of [puran-water/autocad-mcp](https://github.com/puran-water/autocad-mcp).
+Both connect an AI assistant to AutoCAD LT so it can draw, edit and inspect drawings for you. This
+version has been used every day on real engineering drawings, and every problem found along the way
+has been fixed and covered by a test.
 
-This is a fork of [puran-water/autocad-mcp](https://github.com/puran-water/autocad-mcp), hardened
-through daily production use on AutoCAD LT 2027. It focuses on three things: answers you can trust,
-screenshots that cost less, and failures that say what actually happened.
+> **New to this?** AutoCAD LT is drafting software used for technical drawings. MCP is the standard
+> way to plug a tool into an AI assistant. This repo is that plug.
 
-| | Upstream | This fork |
+## Why start here instead of the original?
+
+1. **It doesn't claim work it didn't do.** The original can report "saved" when nothing was saved.
+   That happened on a real drawing. Here every save, DXF export and PDF plot is checked on disk
+   before the assistant is told "done".
+2. **It costs less to run.** AI assistants are billed by how much they read. The original sends every
+   result twice and every screenshot at full size. Here results are sent once, a screenshot costs
+   less than half as much by default, and a close-up of one area costs about a fifth as much.
+3. **It answers with measurements, not pictures.** To find out whether two things overlap or what a
+   label says, the original can only take a screenshot and look. Here the assistant asks the drawing
+   directly and gets exact numbers and text back.
+4. **When something goes wrong, it says what happened and whether it's safe to try again.** If
+   AutoCAD is busy, in the middle of another command, or showing a different drawing, this version
+   stops and says so. It won't act on the wrong drawing or do the same step twice.
+5. **It's tested.** It has 800+ automated tests that run on every change. The original has 123, and
+   they can't be run out of the box.
+
+### New in this fork
+
+| Feature | What it does for you |
+|---|---|
+| **Drawing probes** | Ask "does this overlap?", "what does this label say?" or "is this area empty?" and get an exact answer, with no screenshot |
+| **Selection handoff** | Select objects in AutoCAD yourself, and the assistant works on exactly those |
+| **Switch drawings** | Moves between open drawings with no click, and confirms which one is active |
+| **Read the command line** | The assistant sees AutoCAD's prompts and errors while a command is running |
+| **Screenshot controls** | Crop to one area, save to disk instead of reading the image, and see each capture's cost |
+| **Assistant skills** | Ready-made working rules that teach the assistant to drive AutoCAD safely ([`skills/`](skills/)) |
+| **Automatic testing** | Every change is tested on GitHub before it lands |
+
+### Improved over the original
+
+| Area | Original | This fork |
 |---|---|---|
-| Tests | 123 (not runnable via `uv run`) | **830**, run on CI for every push |
-| Tool results | sent twice (`structuredContent` + content) | sent once |
-| Screenshots | native resolution, full window | 1280 px cap, crop before downscale, save-to-disk, token estimate on every capture |
-| Spatial questions | screenshot only | geometry, extents and probes (overlap, text, occupancy) as numbers |
-| IPC timeout on a write | "timed out" | says whether the write may still land, and whether a retry is safe |
-| Saves | LISP says "saved" | file checked on disk; `save_unverified` otherwise |
+| Saving, DXF export, PDF | Reports success without checking. A failed save said "saved", and DXF export wrote no file at all | Checks the file on disk and reports failure if it isn't there |
+| Running cost | Every result sent twice; screenshots at full size | Sent once; screenshots capped at 1280 px (56% fewer tokens on a typical window) |
+| Timeouts | "Timed out" | Says whether the action never started (safe to retry) or may still finish (don't repeat it) |
+| Busy AutoCAD or wrong drawing | Can type into a running command or act on the wrong drawing | Refuses and says why |
+| Erasing | Erasing something already erased brought it back | Reports "not found" |
+| Opening a drawing | Reports success while opening nothing | Says it can't, and names the drawing that is still active |
+| Object details | Type, handle and layer only | Full geometry and extents, the same from both backends |
+| Safety labels | Marks the tool that runs any code as read-only | Each tool labelled correctly, so the assistant knows which actions need your OK |
 
-The work is going upstream as a stack of small PRs, each with its own tests and a green CI run:
+Known limits are listed openly in [docs/known-issues.md](docs/known-issues.md). Error codes and
+when a retry is safe: [docs/error-model.md](docs/error-model.md).
 
-| PR | Change | Suite after |
+## Contributing back upstream
+
+The improvements are going back to the original as a stack of small pull requests. Each one has its
+own tests and a green CI run:
+
+| PR | Change | Tests after |
 |---|---|---|
 | [#2](https://github.com/WiddlyBits/autocad-mcp/pull/2) | Build + CI: runnable tests, ruff, GitHub Actions | 123 |
 | [#3](https://github.com/WiddlyBits/autocad-mcp/pull/3) | Stop sending every tool result twice | 131 |
@@ -34,8 +75,9 @@ The work is going upstream as a stack of small PRs, each with its own tests and 
 | [#10](https://github.com/WiddlyBits/autocad-mcp/pull/10) | Error model and retry policy docs | 693 |
 
 Still fork-only for now: selection handoff, measured writes, `system(command_line)`, `switch_doc`,
-`drawing(plot_pdf)` and the AutoCAD agent skills in `skills/`. Error codes and retry rules:
-[docs/error-model.md](docs/error-model.md). Open defects: [docs/known-issues.md](docs/known-issues.md).
+`drawing(plot_pdf)` and the assistant skills.
+
+## Technical overview
 
 Two backends, one API:
 
