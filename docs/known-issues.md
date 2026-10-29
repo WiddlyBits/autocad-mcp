@@ -46,6 +46,12 @@ between, and `REDO` sent through a dispatch.
 - Bboxes for DIMENSION, HATCH and VIEWPORT (2026-10-29): a production sheet's floating viewport
   on its border layer reads `exact true` with the hand-computed box, and `bbox_types.dxf`'s
   `layer` lines match `bbox_types.snap` byte for byte in Model and Layout1.
+- FILEDIA restore (2026-10-29): `FILEDIA` 0, then `drawing(save, path)` to a new `.dwg`, left
+  `FILEDIA` at 0 (it used to come back 1); file written (565,152 bytes), `DWGNAME` retargeted, `DBMOD` 0.
+- Erase payload (2026-10-29): erase by handle returned `{"entity_type":"LINE","handle":"3D92E","layer":"0"}`,
+  and `"last"` returned the CIRCLE it removed. A second erase of the same handle returned
+  `ok:false` "Entity not found". This branch's `mcp_dispatch.lsp` has to be loaded by full path:
+  `ping` cannot tell it apart from a main-branch copy, because it predates `*mcp-dispatcher-loaded*`.
 
 ## LT 2027 limits (measured)
 
