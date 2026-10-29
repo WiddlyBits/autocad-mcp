@@ -15,9 +15,12 @@ the same reason as the create-verb `layer` fix below; `erase` stays a bare strin
 The series carries no `skills/`, so the merge must also update the `entity` line in
 `skills/autocad-mcp-workflow/references/tool-reference.md`, which still says `"moved"`.
 
-**`mcp:ent-bbox-data` has no branch for some entity types** (DIMENSION, HATCH, and the type on
-the ECSI `border line 02` layer, 2026-08-15), so `bbox-by-layer` reports `bbox none` for them.
-Crossing-mode grid maps still draw them, because `ssget` sees geometry the bbox code cannot measure.
+**`mcp:ent-bbox-data` has no branch for DIMENSION, HATCH or VIEWPORT**, so `bbox-by-layer`
+reports `bbox none` for them. VIEWPORT is the type on the ECSI `border line 02` layer (found
+2026-10-28). Crossing-mode grid maps still draw them, because `ssget` sees geometry the bbox code
+cannot measure. Fixed on the series (`series/07-probes`, "fix(probes): measure DIMENSION, HATCH
+and VIEWPORT bboxes", LISP and Python, live-checked on LT 2027); main takes it with the series
+merge rather than a port.
 
 **`mcp:in-model-space` has no call sites.** It wraps an `entmakex` in `CTAB "Model"` and restores
 the tab. Use it only when the target is model space; a paper-space rebuild must not be wrapped.
