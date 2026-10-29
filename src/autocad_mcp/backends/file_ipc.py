@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 import uuid
@@ -28,6 +29,25 @@ log = structlog.get_logger()
 POLL_INTERVAL = 0.1  # seconds
 TIMEOUT = IPC_TIMEOUT  # seconds (configurable via AUTOCAD_MCP_IPC_TIMEOUT)
 STALE_THRESHOLD = 60.0  # clean up files older than this
+
+# Commands that write to the drawing — a timeout on these may have partially applied.
+_MUTATING_COMMANDS: frozenset[str] = frozenset({
+    "create-line", "create-circle", "create-polyline", "create-rectangle",
+    "create-arc", "create-ellipse", "create-mtext", "create-hatch", "create-text",
+    "create-dimension-linear", "create-dimension-aligned",
+    "create-dimension-angular", "create-dimension-radius", "create-leader",
+    "entity-erase", "entity-move", "entity-copy", "entity-rotate", "entity-scale",
+    "entity-mirror", "entity-offset", "entity-array", "entity-fillet", "entity-chamfer",
+    "block-insert", "block-insert-with-attributes", "block-update-attribute", "block-define",
+    "layer-create", "layer-set-current", "layer-set-properties",
+    "layer-freeze", "layer-thaw", "layer-lock", "layer-unlock",
+    "drawing-save", "drawing-save-as-dxf", "drawing-plot-pdf", "drawing-purge",
+    "execute-lisp",
+    "pid-setup-layers", "pid-insert-symbol", "pid-draw-process-line",
+    "pid-connect-equipment", "pid-add-flow-arrow", "pid-add-equipment-tag",
+    "pid-add-line-number", "pid-insert-valve", "pid-insert-instrument",
+    "pid-insert-pump", "pid-insert-tank",
+})
 
 
 def find_autocad_window() -> int | None:
@@ -61,6 +81,7 @@ class FileIPCBackend(AutoCADBackend):
         self._ipc_dir = Path(IPC_DIR)
         self._screenshot_provider = None
         self._lock = asyncio.Lock()  # Single in-flight command
+        self._status_file = self._ipc_dir / "mcp_status.txt"
 
     @property
     def name(self) -> str:
@@ -120,6 +141,12 @@ class FileIPCBackend(AutoCADBackend):
 
         return CommandResult(ok=True, payload={"backend": "file_ipc", "hwnd": self._hwnd})
 
+    def _write_status(self, msg: str) -> None:
+        try:
+            self._status_file.write_text(msg, encoding="utf-8")
+        except OSError:
+            pass
+
     async def status(self) -> CommandResult:
         info = {
             "backend": "file_ipc",
@@ -127,9 +154,28 @@ class FileIPCBackend(AutoCADBackend):
             "ipc_dir": str(self._ipc_dir),
             "capabilities": {k: v for k, v in self.capabilities.__dict__.items()},
         }
+        try:
+            info["mcp_status"] = self._status_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            info["mcp_status"] = "unknown"
         return CommandResult(ok=True, payload=info)
 
     # --- IPC dispatch ---
+
+    def _reacquire_hwnd(self) -> bool:
+        """Re-find the AutoCAD window after a restart. Returns True if acquired."""
+        hwnd = find_autocad_window()
+        if not hwnd:
+            return False
+        self._hwnd = hwnd
+        self._command_hwnd = self._find_command_line_hwnd()
+        try:
+            from autocad_mcp.screenshot import Win32ScreenshotProvider
+            self._screenshot_provider = Win32ScreenshotProvider(self._hwnd)
+        except Exception:
+            pass
+        log.info("hwnd_reacquired", hwnd=self._hwnd, command_hwnd=self._command_hwnd)
+        return True
 
     async def _dispatch(self, command: str, params: dict) -> CommandResult:
         """Send a command via file IPC and wait for result."""
@@ -143,6 +189,35 @@ class FileIPCBackend(AutoCADBackend):
         result_file = self._ipc_dir / f"autocad_mcp_result_{request_id}.json"
         tmp_file = cmd_file.with_suffix(".tmp")
 
+        # Detect and remove leftover IPC files from a previous timed-out dispatch.
+        # ESC injection is targeted: only fired when stale files are present, not
+        # unconditionally. Blanket ESC was interrupting user commands.
+        stale = self._check_stale_ipc_files()
+        if stale:
+            log.warning("stale_ipc_recovery", stale_count=len(stale), command=command)
+            for f in stale:
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        # Verify the cached hwnd is still valid. PostMessageW to a dead handle
+        # fails silently — the cmd file is written but AutoCAD never receives the
+        # keystroke, so the dispatch times out with no other indication.
+        if sys.platform == "win32":
+            try:
+                import win32gui
+                if self._hwnd is None or not win32gui.IsWindow(self._hwnd):
+                    log.warning("stale_hwnd_detected", hwnd=self._hwnd)
+                    if not self._reacquire_hwnd():
+                        return CommandResult(ok=False, error="autocad_not_found")
+            except ImportError:
+                pass
+
+        if self._is_autocad_busy():
+            return CommandResult(ok=False, error="autocad_busy")
+
+        self._write_status(f"busy:{command}")
         try:
             # Strip None values — the simple LISP JSON parser can't handle null
             clean_params = {k: v for k, v in params.items() if v is not None}
@@ -156,8 +231,8 @@ class FileIPCBackend(AutoCADBackend):
             tmp_file.write_text(json.dumps(payload), encoding="utf-8")
             tmp_file.rename(cmd_file)
 
-            # Type the fixed dispatch trigger
-            self._type_dispatch_trigger()
+            # Type the fixed dispatch trigger; ESC only when recovering from stale state
+            self._type_dispatch_trigger(inject_esc=bool(stale))
 
             # Poll for result
             deadline = time.time() + TIMEOUT
@@ -182,15 +257,38 @@ class FileIPCBackend(AutoCADBackend):
                         pass  # File may be partially written, retry
                 await asyncio.sleep(POLL_INTERVAL)
 
+            if command in _MUTATING_COMMANDS:
+                return CommandResult(
+                    ok=False,
+                    error="timeout_mutating",
+                    payload={"may_have_applied": True, "request_id": request_id},
+                )
             return CommandResult(ok=False, error=f"Timeout waiting for result (request_id={request_id})")
 
         finally:
+            self._write_status("idle")
             # Cleanup
             for f in (cmd_file, result_file, tmp_file):
                 try:
                     f.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+    def _check_stale_ipc_files(self) -> list[Path]:
+        """Return leftover IPC files from a previous timed-out dispatch.
+
+        Called at the start of every dispatch before any files are written for
+        the current request, so any match predates the current call. Presence
+        of these files means a prior timed-out mutating dispatch may have left
+        AutoCAD mid-command and ESC recovery is warranted.
+        """
+        found: list[Path] = []
+        try:
+            for pattern in ("autocad_mcp_cmd_*.json", "autocad_mcp_result_*.json"):
+                found.extend(self._ipc_dir.glob(pattern))
+        except OSError:
+            pass
+        return found
 
     def _find_command_line_hwnd(self) -> int | None:
         """Find AutoCAD's MDIClient child window for command routing."""
@@ -212,11 +310,29 @@ class FileIPCBackend(AutoCADBackend):
         except Exception:
             return None
 
-    def _type_dispatch_trigger(self):
+    def _is_autocad_busy(self) -> bool:
+        """Return True if AutoCAD's active document is mid-command.
+
+        Best-effort: returns False if COM is unavailable (LT, no pywin32,
+        no document open). Caller must hold _lock so the check is atomic
+        with the subsequent file write.
+        """
+        if sys.platform != "win32":
+            return False
+        try:
+            import win32com.client
+            app = win32com.client.GetActiveObject("AutoCAD.Application")
+            return not app.ActiveDocument.IsQuiescent
+        except Exception:
+            return False
+
+    def _type_dispatch_trigger(self, inject_esc: bool = False) -> None:
         """Post '(c:mcp-dispatch)' + Enter via WM_CHAR to MDIClient — no focus steal.
 
-        Sends ESC keystrokes first to cancel any stale pending command
-        (e.g. from a previous timeout leaving AutoCAD in a command prompt).
+        inject_esc: send 2×ESC before dispatching to cancel a stale pending
+        command. Only True when _check_stale_ipc_files() found leftover files,
+        indicating a prior timed-out dispatch may have left AutoCAD mid-command.
+        Not injected on clean dispatches to avoid interrupting user commands.
         """
         try:
             import ctypes
@@ -228,11 +344,12 @@ class FileIPCBackend(AutoCADBackend):
             target = self._command_hwnd or self._hwnd
             post = ctypes.windll.user32.PostMessageW
 
-            # Cancel any pending command (2x ESC for nested commands)
-            for _ in range(2):
-                post(target, WM_KEYDOWN, VK_ESCAPE, 0)
-                post(target, WM_KEYUP, VK_ESCAPE, 0)
-            time.sleep(0.05)
+            if inject_esc:
+                # Cancel stale pending command (2x ESC for nested commands)
+                for _ in range(2):
+                    post(target, WM_KEYDOWN, VK_ESCAPE, 0)
+                    post(target, WM_KEYUP, VK_ESCAPE, 0)
+                time.sleep(0.05)
 
             for ch in "(c:mcp-dispatch)":
                 post(target, WM_CHAR, ord(ch), 0)
@@ -255,14 +372,58 @@ class FileIPCBackend(AutoCADBackend):
 
     # --- Drawing management ---
 
+    @staticmethod
+    def _file_state(path: str) -> tuple[int, int] | None:
+        """(mtime_ns, size) of path, or None when it does not exist."""
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _verify_file_written(
+        self, path: str, before: tuple[int, int] | None
+    ) -> CommandResult | None:
+        """Return an error CommandResult unless path is new or its mtime/size moved.
+
+        Compares against the file's own state from before the call, not the
+        wall clock: AutoCAD stamps a .dwg mtime to the whole second, so a save
+        landing inside the second it started compared <= time.time() and read
+        as unchanged (x.dwg from a .dwt, 2026-10-08).
+        """
+        after = self._file_state(path)
+        if after is None:
+            return CommandResult(
+                ok=False, error="save_unverified",
+                payload={"detail": "file not found", "path": path},
+            )
+        if after == before:
+            return CommandResult(
+                ok=False, error="save_unverified",
+                payload={"detail": "timestamp unchanged", "path": path},
+            )
+        return None
+
     async def drawing_info(self) -> CommandResult:
         return await self._dispatch("drawing-info", {})
 
     async def drawing_save(self, path: str | None = None) -> CommandResult:
-        return await self._dispatch("drawing-save", {"path": path})
+        before = self._file_state(path) if path else None
+        result = await self._dispatch("drawing-save", {"path": path})
+        if result.ok and path:
+            err = self._verify_file_written(path, before)
+            if err:
+                return err
+        return result
 
     async def drawing_save_as_dxf(self, path: str) -> CommandResult:
-        return await self._dispatch("drawing-save-as-dxf", {"path": path})
+        before = self._file_state(path)
+        result = await self._dispatch("drawing-save-as-dxf", {"path": path})
+        if result.ok:
+            err = self._verify_file_written(path, before)
+            if err:
+                return err
+        return result
 
     async def drawing_create(self, name: str | None = None) -> CommandResult:
         return await self._dispatch("drawing-create", {"name": name})
@@ -271,7 +432,13 @@ class FileIPCBackend(AutoCADBackend):
         return await self._dispatch("drawing-purge", {})
 
     async def drawing_plot_pdf(self, path: str) -> CommandResult:
-        return await self._dispatch("drawing-plot-pdf", {"path": path})
+        before = self._file_state(path)
+        result = await self._dispatch("drawing-plot-pdf", {"path": path})
+        if result.ok:
+            err = self._verify_file_written(path, before)
+            if err:
+                return err
+        return result
 
     async def drawing_get_variables(self, names: list[str] | None = None) -> CommandResult:
         if names:
@@ -291,7 +458,10 @@ class FileIPCBackend(AutoCADBackend):
         return await self._dispatch("undo", {})
 
     async def redo(self) -> CommandResult:
-        return await self._dispatch("redo", {})
+        return CommandResult(
+            ok=False,
+            error="Redo is not available through MCP dispatch; run REDO at the AutoCAD command line",
+        )
 
     # --- Freehand LISP execution ---
 
