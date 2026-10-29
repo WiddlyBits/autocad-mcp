@@ -1,6 +1,41 @@
 # AutoCAD MCP Server
 
+[![CI](https://github.com/WiddlyBits/autocad-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WiddlyBits/autocad-mcp/actions/workflows/ci.yml)
+
 MCP server for AutoCAD LT automation and headless DXF generation.
+
+## About this fork
+
+This is a fork of [puran-water/autocad-mcp](https://github.com/puran-water/autocad-mcp), hardened
+through daily production use on AutoCAD LT 2027. It focuses on three things: answers you can trust,
+screenshots that cost less, and failures that say what actually happened.
+
+| | Upstream | This fork |
+|---|---|---|
+| Tests | 123 (not runnable via `uv run`) | **830**, run on CI for every push |
+| Tool results | sent twice (`structuredContent` + content) | sent once |
+| Screenshots | native resolution, full window | 1280 px cap, crop before downscale, save-to-disk, token estimate on every capture |
+| Spatial questions | screenshot only | geometry, extents and probes (overlap, text, occupancy) as numbers |
+| IPC timeout on a write | "timed out" | says whether the write may still land, and whether a retry is safe |
+| Saves | LISP says "saved" | file checked on disk; `save_unverified` otherwise |
+
+The work is going upstream as a stack of small PRs, each with its own tests and a green CI run:
+
+| PR | Change | Suite after |
+|---|---|---|
+| [#2](https://github.com/WiddlyBits/autocad-mcp/pull/2) | Build + CI: runnable tests, ruff, GitHub Actions | 123 |
+| [#3](https://github.com/WiddlyBits/autocad-mcp/pull/3) | Stop sending every tool result twice | 131 |
+| [#4](https://github.com/WiddlyBits/autocad-mcp/pull/4) | Screenshot cost controls | 169 |
+| [#5](https://github.com/WiddlyBits/autocad-mcp/pull/5) | `readOnlyHint` / `destructiveHint` on every tool | 178 |
+| [#6](https://github.com/WiddlyBits/autocad-mcp/pull/6) | Entity geometry and extents, same shape on both backends | 227 |
+| [#7](https://github.com/WiddlyBits/autocad-mcp/pull/7) | Drawing probes: Python reference, AutoLISP port, golden fixtures | 599 |
+| [#8](https://github.com/WiddlyBits/autocad-mcp/pull/8) | IPC timeouts, verified saves, stale-state recovery | 640 |
+| [#9](https://github.com/WiddlyBits/autocad-mcp/pull/9) | Command claim, active-command refusal, `assert_doc` | 693 |
+| [#10](https://github.com/WiddlyBits/autocad-mcp/pull/10) | Error model and retry policy docs | 693 |
+
+Still fork-only for now: selection handoff, measured writes, `system(command_line)`, `switch_doc`,
+`drawing(plot_pdf)` and the AutoCAD agent skills in `skills/`. Error codes and retry rules:
+[docs/error-model.md](docs/error-model.md). Open defects: [docs/known-issues.md](docs/known-issues.md).
 
 Two backends, one API:
 
@@ -25,7 +60,7 @@ The server exposes **8 consolidated tools** (`drawing`, `entity`, `layer`, `bloc
 ### 1. Clone and install
 
 ```powershell
-git clone https://github.com/puran-water/autocad-mcp.git
+git clone https://github.com/WiddlyBits/autocad-mcp.git
 cd autocad-mcp
 uv sync
 ```
@@ -198,6 +233,25 @@ Python MCP Server (autocad_mcp)
 ```
 
 The File IPC backend sends keystrokes to AutoCAD's MDIClient window via `PostMessageW(WM_CHAR)`, triggering the `(c:mcp-dispatch)` AutoLISP command. This approach does **not** steal window focus — you can continue working in other applications while automation runs.
+
+One File IPC round trip, including how a timeout is classified:
+
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant S as Python server
+    participant F as IPC dir (C:/temp)
+    participant A as mcp_dispatch.lsp (AutoCAD LT)
+    C->>S: tool call (stdio)
+    S->>F: write cmd_{id}.json (tmp + rename)
+    S->>A: PostMessageW(WM_CHAR) "(c:mcp-dispatch)", no focus steal
+    A->>F: claim: rename cmd_{id} to run_{id}
+    A->>A: run the command
+    A->>F: write result_{id}.json
+    S->>F: poll for result_{id}.json
+    S->>C: result (saves checked on disk)
+    Note over S,F: On timeout: still cmd_{id} means never started (timeout_not_dispatched, safe to retry).<br/>run_{id} on a write means it may still land (timeout_mutating, do not blind-retry).
+```
 
 ## Environment Variables
 
