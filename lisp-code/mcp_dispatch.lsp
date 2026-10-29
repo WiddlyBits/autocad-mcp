@@ -709,7 +709,7 @@
   )
 )
 
-(defun mcp-cmd-entity-move (params / entity-id dx dy ent)
+(defun mcp-cmd-entity-move (params / entity-id dx dy ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq dx (mcp-json-get-number params "dx"))
   (setq dy (mcp-json-get-number params "dy"))
@@ -720,7 +720,9 @@
   (if ent
     (progn
       (command "_.MOVE" ent "" '(0 0 0) (list dx dy 0))
-      (cons T "\"moved\""))
+      (setq ed (entget ent))
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
     (cons nil "Entity not found")
   )
 )
@@ -1052,26 +1054,34 @@
   )
 )
 
-(defun mcp-cmd-entity-rotate (params / entity-id cx cy angle ent)
+(defun mcp-cmd-entity-rotate (params / entity-id cx cy angle ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq angle (mcp-json-get-number params "angle"))
   (if (= entity-id "last") (setq ent (entlast)) (setq ent (handent entity-id)))
   (if ent
-    (progn (command "_.ROTATE" ent "" (list cx cy 0) angle) (cons T "\"rotated\""))
+    (progn
+      (command "_.ROTATE" ent "" (list cx cy 0) angle)
+      (setq ed (entget ent))
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
     (cons nil "Entity not found")
   )
 )
 
-(defun mcp-cmd-entity-scale (params / entity-id cx cy factor ent)
+(defun mcp-cmd-entity-scale (params / entity-id cx cy factor ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
   (setq cx (mcp-json-get-number params "cx"))
   (setq cy (mcp-json-get-number params "cy"))
   (setq factor (mcp-json-get-number params "factor"))
   (if (= entity-id "last") (setq ent (entlast)) (setq ent (handent entity-id)))
   (if ent
-    (progn (command "_.SCALE" ent "" (list cx cy 0) factor) (cons T "\"scaled\""))
+    (progn
+      (command "_.SCALE" ent "" (list cx cy 0) factor)
+      (setq ed (entget ent))
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
     (cons nil "Entity not found")
   )
 )

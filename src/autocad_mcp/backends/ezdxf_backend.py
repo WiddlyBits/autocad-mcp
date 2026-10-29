@@ -345,7 +345,7 @@ class EzdxfBackend(AutoCADBackend):
             if e is None:
                 return CommandResult(ok=False, error=f"Entity {entity_id} not found")
             e.translate(dx, dy, 0)
-            return CommandResult(ok=True, payload={"moved": entity_id})
+            return CommandResult(ok=True, payload={"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer})
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 
@@ -360,7 +360,7 @@ class EzdxfBackend(AutoCADBackend):
             e.translate(-cx, -cy, 0)
             e.transform(m)
             e.translate(cx, cy, 0)
-            return CommandResult(ok=True, payload={"rotated": entity_id})
+            return CommandResult(ok=True, payload={"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer})
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 
@@ -374,7 +374,7 @@ class EzdxfBackend(AutoCADBackend):
             e.translate(-cx, -cy, 0)
             e.transform(m)
             e.translate(cx, cy, 0)
-            return CommandResult(ok=True, payload={"scaled": entity_id})
+            return CommandResult(ok=True, payload={"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer})
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 

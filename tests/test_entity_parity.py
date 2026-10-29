@@ -218,3 +218,35 @@ class TestCreateReportsLayer:
         result = await getattr(backend, method)(*args, layer="L1")
         assert result.ok, result.error
         assert result.payload["layer"] == "L1"
+
+
+#: Every in-place edit verb, with the arguments after the handle.
+EDITS = {
+    "mcp-cmd-entity-move": ("entity_move", (5, 5)),
+    "mcp-cmd-entity-rotate": ("entity_rotate", (0, 0, 90)),
+    "mcp-cmd-entity-scale": ("entity_scale", (0, 0, 2)),
+}
+
+
+class TestEditReportsEntity:
+    """move/rotate/scale return the same {entity_type, handle, layer} as the
+    create verbs, so the caller learns what it touched without an entity(get).
+    Both backends."""
+
+    @pytest.mark.parametrize("defun", sorted(EDITS))
+    def test_lisp_returns_entity(self, defun):
+        body = _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), defun)
+        for group in ("(assoc 0 ed)", "(assoc 5 ed)", "(assoc 8 ed)"):
+            assert group in body
+        assert '"\\",\\"layer\\":\\""' in body
+
+    @pytest.mark.parametrize("defun", sorted(EDITS))
+    async def test_ezdxf_returns_entity(self, defun):
+        method, args = EDITS[defun]
+        backend = EzdxfBackend()
+        await backend.initialize()
+        created = await backend.create_circle(0, 0, 1, layer="L1")
+        handle = created.payload["handle"]
+        result = await getattr(backend, method)(handle, *args)
+        assert result.ok, result.error
+        assert result.payload == {"entity_type": "CIRCLE", "handle": handle, "layer": "L1"}
