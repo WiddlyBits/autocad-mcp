@@ -322,8 +322,9 @@ class EzdxfBackend(AutoCADBackend):
                     e = entities[-1]
                 else:
                     return CommandResult(ok=False, error=f"Entity {entity_id} not found")
+            payload = {"entity_type": e.dxftype(), "handle": e.dxf.handle, "layer": e.dxf.layer}
             self._msp.delete_entity(e)
-            return CommandResult(ok=True, payload={"erased": entity_id})
+            return CommandResult(ok=True, payload=payload)
         except Exception as ex:
             return CommandResult(ok=False, error=str(ex))
 

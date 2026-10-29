@@ -692,21 +692,18 @@
   (cons T (strcat "{\"entities\":[" entities "]}"))
 )
 
-(defun mcp-cmd-entity-erase (params / entity-id ent)
+(defun mcp-cmd-entity-erase (params / entity-id ent ed)
   (setq entity-id (mcp-json-get-string params "entity_id"))
-  (if (= entity-id "last")
+  (setq ent (if (= entity-id "last") (entlast) (handent entity-id)))
+  ;; An erased ename still resolves through handent; test entget, as entity-get does.
+  ;; Read it before the ERASE: entget on an erased entity returns nil.
+  (if (and ent (entget ent))
     (progn
-      (setq ent (entlast))
-      (if (and ent (entget ent))
-        (progn (command "_.ERASE" ent "") (cons T "\"erased last entity\""))
-        (cons nil "No entity to erase")))
-    (progn
-      (setq ent (handent entity-id))
-      ;; An erased ename still resolves through handent; test entget, as entity-get does.
-      (if (and ent (entget ent))
-        (progn (command "_.ERASE" ent "") (cons T (strcat "\"erased " entity-id "\"")))
-        (cons nil (strcat "Entity not found: " entity-id))))
-  )
+      (setq ed (entget ent))
+      (command "_.ERASE" ent "")
+      (cons T (strcat "{\"entity_type\":\"" (cdr (assoc 0 ed)) "\",\"handle\":\"" (cdr (assoc 5 ed))
+                      "\",\"layer\":\"" (mcp-escape-string (cdr (assoc 8 ed))) "\"}")))
+    (cons nil (if (= entity-id "last") "No entity to erase" (strcat "Entity not found: " entity-id))))
 )
 
 (defun mcp-cmd-entity-move (params / entity-id dx dy ent ed)

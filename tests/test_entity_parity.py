@@ -225,11 +225,12 @@ EDITS = {
     "mcp-cmd-entity-move": ("entity_move", (5, 5)),
     "mcp-cmd-entity-rotate": ("entity_rotate", (0, 0, 90)),
     "mcp-cmd-entity-scale": ("entity_scale", (0, 0, 2)),
+    "mcp-cmd-entity-erase": ("entity_erase", ()),
 }
 
 
 class TestEditReportsEntity:
-    """move/rotate/scale return the same {entity_type, handle, layer} as the
+    """move/rotate/scale/erase return the same {entity_type, handle, layer} as the
     create verbs, so the caller learns what it touched without an entity(get).
     Both backends."""
 
@@ -239,6 +240,10 @@ class TestEditReportsEntity:
         for group in ("(assoc 0 ed)", "(assoc 5 ed)", "(assoc 8 ed)"):
             assert group in body
         assert '"\\",\\"layer\\":\\""' in body
+
+    def test_lisp_erase_reads_before_erasing(self):
+        body = _defun_body(DISPATCH_LSP.read_text(encoding="utf-8"), "mcp-cmd-entity-erase")
+        assert body.index("(setq ed (entget ent))") < body.index('(command "_.ERASE"')
 
     @pytest.mark.parametrize("defun", sorted(EDITS))
     async def test_ezdxf_returns_entity(self, defun):
