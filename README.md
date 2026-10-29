@@ -283,7 +283,7 @@ sequenceDiagram
     participant C as MCP client
     participant S as Python server
     participant F as IPC dir (C:/temp)
-    participant A as mcp_dispatch.lsp (AutoCAD LT)
+    participant A as AutoCAD LT
     C->>S: tool call (stdio)
     S->>F: write cmd_{id}.json (tmp + rename)
     S->>A: PostMessageW(WM_CHAR) "(c:mcp-dispatch)", no focus steal
