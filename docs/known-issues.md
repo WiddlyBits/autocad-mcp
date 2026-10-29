@@ -6,10 +6,6 @@ UNTESTED.
 
 ## Open
 
-**`erase` returns a bare string.** It returns `"erased <h>"` with no type or layer, where the
-create verbs and `move`/`rotate`/`scale` return `{entity_type, handle, layer}`. The handle is
-only read from top-level `entity_id`; `data.handle` is ignored.
-
 **The crossing grid treats a solid HATCH as a filled region; AutoCAD does not.** Measured
 2026-10-29: `ssget "_C"` hits a solid hatch along its boundary and along its fill's internal
 triangulation edges, and misses windows inside it that touch neither. No group code describes
@@ -34,10 +30,6 @@ group), then a dispatched `entity(count)`, then `REDO` at the command line answe
 "Everything has been redone" and the line came back. One "Nothing to redo" had an autosave
 between `U` and `REDO`; that cause is not isolated. Still unmeasured: a mutating dispatch in
 between, and `REDO` sent through a dispatch.
-
-**`drawing(save, path)` forces `FILEDIA` to 1** instead of restoring it (`mcp_dispatch.lsp`,
-`drawing-save`; `drawing-open` does the same). A session that had `FILEDIA` 0 ends with 1
-(2026-10-28: 0 before, 1 after). `drawing-save-as-dxf` does not set `FILEDIA` at all.
 
 ## Live-verified on LT 2027 (2026-10-28)
 
