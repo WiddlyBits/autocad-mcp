@@ -30,15 +30,15 @@ def _dispatch_source() -> str:
 
 
 class TestRedoIsRefused:
-    """c:mcp-dispatch is itself a command, and running it clears the redo
-    stack. Forwarding redo therefore redoes nothing and reports "redone"."""
+    """REDO sent from inside c:mcp-dispatch is unmeasured, so the backend
+    refuses it and points at the command line, where REDO is measured to work."""
 
     async def test_python_refuses_without_dispatching(self):
         backend = FileIPCBackend()
         with patch.object(backend, "_dispatch", new_callable=AsyncMock) as mock_dispatch:
             result = await backend.redo()
         assert result.ok is False
-        assert "redo stack" in result.error
+        assert "command line" in result.error
         mock_dispatch.assert_not_called()
 
     def test_lisp_redo_branch_does_not_run_redo(self):

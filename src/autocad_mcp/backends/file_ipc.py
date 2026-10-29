@@ -460,7 +460,7 @@ class FileIPCBackend(AutoCADBackend):
     async def redo(self) -> CommandResult:
         return CommandResult(
             ok=False,
-            error="Redo is not available through MCP dispatch — the dispatch command clears the redo stack",
+            error="Redo is not available through MCP dispatch; run REDO at the AutoCAD command line",
         )
 
     # --- Freehand LISP execution ---
