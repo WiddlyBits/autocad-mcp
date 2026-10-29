@@ -17,9 +17,16 @@ has been fixed and covered by a test.
 1. **It doesn't claim work it didn't do.** The original can report "saved" when nothing was saved.
    That happened on a real drawing. Here every save and DXF export is checked on disk
    before the assistant is told "done".
-2. **It costs less to run.** AI assistants are billed by how much they read. The original sends every
-   result twice and every screenshot at full size. Here results are sent once, a screenshot costs
-   less than half as much by default, and a close-up of one area costs about a fifth as much.
+2. **It costs less to run.** AI assistants are billed by how much they read, and they can only hold
+   so much at once (about 200,000 "tokens" of working memory). The original sends every result twice
+   and every screenshot at full size. In one real session, 41 screenshots nearly filled that memory:
+
+   | The same 41 screenshots | Tokens | Share of working memory |
+   |---|---|---|
+   | Original: full size, 1440p monitor | ~196,000 | 98% |
+   | This fork's default (1280 px cap) | ~49,000 | 25% |
+   | Close-ups of just the area that matters | up to ~11,000 | 6% |
+   | Saved to disk, looked at only when needed | 0 | 0% |
 3. **It answers with measurements, not pictures.** To find out whether two things overlap or what a
    label says, the original can only take a screenshot and look. Here the assistant asks the drawing
    directly and gets exact numbers and text back.
@@ -254,11 +261,7 @@ Screenshots use `PrintWindow` (Win32) for the File IPC backend — works even wh
 
 Every successful capture reports `width`, `height`, and `est_tokens` — what looking at it costs.
 
-**`region` is the strongest lever, because cropping precedes the downscale.** A 500×400 crop costs 270 visual tokens at native resolution; the whole 1928×1218 window costs 1,334 even after being downscaled to 1280 — and that downscale is exactly what makes small dimension text unreadable. For a detail check a crop is both ~5× cheaper and sharper.
-
-**`save_to` removes the cost entirely rather than reducing it.** The image goes to disk and nothing enters the context window, so a long edit can drop checkpoints as it goes and spend tokens reading back only the one that turned out to matter.
-
-**`max_dimension` is the parameter that controls cost.** Vision models bill an image as `ceil(width/28) * ceil(height/28)` visual tokens — a function of dimensions only, independent of file size or format. A 2560×1440 window costs 4,784 visual tokens uncapped and 1,196 at `max_dimension=1280`; a 1928×1218 window costs 3,036 and 1,334 respectively. Halving the cap roughly quarters the cost.
+**How cost is counted.** Vision models bill an image as `ceil(width/28) * ceil(height/28)` tokens: pixel dimensions only, not file size or format. A 2560×1440 window costs 4,784 uncapped and 1,196 at the 1280 default. A 500×400 `region` crop costs 270 and stays sharp, because cropping happens before the downscale. `save_to` costs nothing until the file is read.
 
 Two consequences worth knowing:
 
