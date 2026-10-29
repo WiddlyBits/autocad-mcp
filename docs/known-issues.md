@@ -22,9 +22,6 @@ cannot measure. Fixed on the series (`series/07-probes`, "fix(probes): measure D
 and VIEWPORT bboxes", LISP and Python, live-checked on LT 2027); main takes it with the series
 merge rather than a port.
 
-**`mcp:in-model-space` has no call sites.** It wraps an `entmakex` in `CTAB "Model"` and restores
-the tab. Use it only when the target is model space; a paper-space rebuild must not be wrapped.
-
 **ezdxf `create_*` payloads have no `layer`.** They return `{"entity_type", "handle"}`; the
 fix (every create verb reports its layer, both backends) is on the `series/10b-command-claim`
 stack and lands when that merges (decided 2026-10-28), so `mcp_dispatch.lsp` takes the
@@ -41,7 +38,8 @@ Covered by unit tests only. All four were run live on 2026-10-28 against the
 from this branch's, so they still count as untested here:
 
 - `entity(erase)` through `_.ERASE`, then `U` restoring the entity.
-- `redo` is refused because the dispatch command is said to clear the redo stack. On the series
+- `redo` is refused and points at the command line; the old reason (dispatch clears the redo
+  stack) was dropped as unproven. On the series
   dispatcher a dispatched `entity(count)` between `U` and `REDO` did not clear it
   ("Everything has been redone"); this branch's dispatch path was not measured.
 - `timeout_not_dispatched`. `command_active` was verified live on 2026-10-14.

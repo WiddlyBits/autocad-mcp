@@ -267,7 +267,7 @@
                             (itoa (car undo-after)) "}"))))))
 
     ((= cmd-name "redo")
-     (cons nil "Redo is not available through MCP dispatch — the dispatch command clears the redo stack"))
+     (cons nil "Redo is not available through MCP dispatch; run REDO at the AutoCAD command line"))
 
     ;; --- Drawing info ---
     ((= cmd-name "drawing-info")
