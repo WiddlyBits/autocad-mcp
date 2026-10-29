@@ -1002,7 +1002,6 @@ def entity_segments(info: dict, blocks=None, _depth: int = 0) -> list[tuple]:
             return []
         return [s for m in members for s in entity_segments(m, blocks, _depth + 1)]
 
-    # A VIEWPORT lands here too: its bbox outline is its frame.
     box = entity_bbox(info, blocks)
     return _rect_segments(box) if box else []
 
@@ -1012,7 +1011,7 @@ def entity_segments(info: dict, blocks=None, _depth: int = 0) -> list[tuple]:
 #: text picks up that text, it does not fall through the middle of it.
 _OUTLINE_TYPES = {
     "LINE", "CIRCLE", "ARC", "ELLIPSE", "LWPOLYLINE", "POLYLINE", "POINT", "INSERT",
-    "DIMENSION", "VIEWPORT",
+    "DIMENSION",
 }
 # HATCH stays solid. AutoCAD's crossing test hits a solid fill along its
 # boundary and its internal triangulation edges (measured on LT 2027), which
@@ -1037,6 +1036,10 @@ def geometry_probe(
     """
     prepared = []
     for e in entities:
+        # mcp:cell-occupied filters VIEWPORT out of its ssget: a frame crossing
+        # the region marks every edge cell. Its bbox still counts for extents.
+        if e.get("type") == "VIEWPORT":
+            continue
         box = entity_bbox(e, blocks)
         if box is None:
             continue

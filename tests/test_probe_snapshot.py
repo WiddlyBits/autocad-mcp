@@ -343,3 +343,11 @@ class TestAdapterCarriesTheExtraTypes:
         entities, _ = probe_dxf.collect(golden, "Layout1")
         vp = next(e for e in entities if e["type"] == "VIEWPORT")
         assert (vp["center"], vp["width"], vp["height"], vp["clipped"]) == ([5.0, 4.0], 6.0, 3.0, False)
+
+    def test_viewport_frame_stays_out_of_the_crossing_grid(self, golden):
+        """mcp:cell-occupied excludes VIEWPORT from ssget, so the Python grid
+        must too, while extents still cover the frame on both sides."""
+        snap = probe_dxf.snapshot_doc(golden, space="Layout1")
+        assert "extents-computed 2.000000 2.500000 8.000000 5.500000" in snap
+        grid = [ln for ln in snap.splitlines() if ln.startswith("grid | ")]
+        assert len(grid) == 12 and not any("#" in ln for ln in grid)
