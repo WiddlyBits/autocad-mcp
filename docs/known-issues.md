@@ -17,19 +17,15 @@ in the bbox code (2026-10-29, `bbox_types.dxf`, every `layer` line identical): A
 `$EXTMIN`/`$EXTMAX` on open, so `extents-header` is set live and `none` from ezdxf; and it
 creates the layout's ID 1 viewport on open, which adds an unmeasured entity on layer `0`.
 
-**`mcp:in-model-space` has no call sites.** It wraps a thunk in `CTAB "Model"` and restores the
-tab. Use it only when the target is model space; a paper-space rebuild must not be wrapped.
-
 **`expected_doc` is backend-only.** No tool sets the `expected_doc` argument of
 `_dispatch`/`execute_lisp`; only backend code can. A tool caller gets the same check by calling
 `system(assert_doc)` first, at the cost of one extra round trip.
 
-**`redo`'s refusal gives a reason that is false for reads.** The message says the dispatch
-command clears the redo stack. Measured 2026-10-28: `U` (undoing a dispatched `create_line`
-group), then a dispatched `entity(count)`, then `REDO` at the command line answered
-"Everything has been redone" and the line came back. One "Nothing to redo" had an autosave
-between `U` and `REDO`; that cause is not isolated. Still unmeasured: a mutating dispatch in
-between, and `REDO` sent through a dispatch.
+**`redo` is refused through dispatch, cause unmeasured.** The refusal used to say the dispatch
+command clears the redo stack; that was false for reads, so it now points at the command line.
+Measured 2026-10-28: `U`, then a dispatched `entity(count)`, then `REDO` at the command line
+answered "Everything has been redone". Still unmeasured: a mutating dispatch in between, and
+`REDO` sent through a dispatch.
 
 ## Live-verified on LT 2027 (2026-10-28)
 
