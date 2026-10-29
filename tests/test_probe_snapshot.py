@@ -319,3 +319,27 @@ def test_probes_module_and_lisp_port_are_kept_together():
         "mcp_probes.lsp must emit the same snapshot header as probes.py, or the "
         "golden fixture cannot be used to validate the AutoLISP port."
     )
+
+
+class TestAdapterCarriesTheExtraTypes:
+    """What probe_dxf adds to the entity(get) shape for the types probes.py
+    measures from more than their own groups."""
+
+    @pytest.fixture(scope="class")
+    def golden(self):
+        return ezdxf.readfile(str(GOLDEN_DIR / "bbox_types.dxf"))
+
+    def test_dimension_names_its_block_and_the_block_is_kept(self, golden):
+        entities, blocks = probe_dxf.collect(golden)
+        dim = next(e for e in entities if e["type"] == "DIMENSION")
+        assert dim["block"].startswith("*D") and dim["block"] in blocks
+
+    def test_hatch_boundary_has_every_edge_kind(self, golden):
+        entities, _ = probe_dxf.collect(golden)
+        kinds = {edge["edge"] for e in entities if e["type"] == "HATCH" for edge in e["boundary"]}
+        assert kinds == {"points", "arc", "ellipse"}
+
+    def test_viewport_carries_its_rectangle(self, golden):
+        entities, _ = probe_dxf.collect(golden, "Layout1")
+        vp = next(e for e in entities if e["type"] == "VIEWPORT")
+        assert (vp["center"], vp["width"], vp["height"], vp["clipped"]) == ([5.0, 4.0], 6.0, 3.0, False)

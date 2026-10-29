@@ -1,0 +1,22 @@
+# mcp-snapshot v2
+space Model
+entities 4 approx 4 unmeasured 0 truncated no
+hidden-layers 0
+extents-header none
+extents-computed -5.000000 0.000000 130.000000 45.000000
+layer DIMS count 1 bbox 0.000000 30.000000 50.000000 45.000000 exact no
+layer HATCH-EDGE count 2 bbox -5.000000 0.000000 80.000000 20.000000 exact no
+layer HATCH-POLY count 1 bbox 100.000000 0.000000 130.000000 20.000000 exact no
+grid 24x12 crossing -5.000000 0.000000 130.000000 45.000000
+grid | ##########.............. |
+grid | #........#.............. |
+grid | #........#.............. |
+grid | #........#.............. |
+grid | #........#.............. |
+grid | ........................ |
+grid | ##########........###### |
+grid | ##########.#####..###### |
+grid | ##########.#####..###### |
+grid | ##########.#####..###### |
+grid | ##########.#####..###### |
+grid | ##########.#####..###### |

@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import ezdxf
+from ezdxf.entities.boundary_paths import BoundaryPathType, EdgeType
 
 from autocad_mcp.backends.ezdxf_backend import EzdxfBackend
 from autocad_mcp.probes import BBox, snapshot
@@ -33,7 +34,51 @@ def entity_info(entity) -> dict:
         # under-reports. DXF group 42 per vertex; group 42 on the whole
         # entity in AutoLISP's entget.
         info["has_bulge"] = any(abs(p[4]) > 1e-12 for p in entity.get_points("xyseb"))
+    elif info["type"] == "HATCH":
+        info["boundary"] = hatch_boundary(entity)
+    elif info["type"] == "DIMENSION":
+        # The anonymous *D block AutoCAD draws the dimension from: entget group 2.
+        info["block"] = entity.dxf.get("geometry", "")
+    elif info["type"] == "VIEWPORT":
+        d = entity.dxf
+        info.update({
+            "center": [float(c) for c in list(d.center)[:2]],
+            "width": float(d.width),
+            "height": float(d.height),
+            "id": int(d.get("id", 0)),
+            # entget carries group 340 only when a clip boundary is set.
+            "clipped": d.get("clipping_boundary_handle", "0") not in ("0", ""),
+        })
     return info
+
+
+def hatch_boundary(entity) -> list[dict]:
+    """A HATCH's boundary paths as the edges probes.hatch_bbox measures.
+
+    Polyline paths, line edges and spline control/fit points all reduce to
+    points; arcs and ellipses keep what their full-curve box needs. The same
+    reduction mcp:hatch-bbox makes walking the entget groups in order.
+    """
+    def pt(v) -> list[float]:
+        return [float(v[0]), float(v[1])]
+
+    out: list[dict] = []
+    for path in entity.paths:
+        if path.type == BoundaryPathType.POLYLINE:
+            out.append({"edge": "points", "points": [pt(v) for v in path.vertices]})
+            continue
+        for edge in path.edges:
+            if edge.type == EdgeType.LINE:
+                out.append({"edge": "points", "points": [pt(edge.start), pt(edge.end)]})
+            elif edge.type == EdgeType.ARC:
+                out.append({"edge": "arc", "center": pt(edge.center), "radius": float(edge.radius)})
+            elif edge.type == EdgeType.ELLIPSE:
+                out.append({"edge": "ellipse", "center": pt(edge.center),
+                            "major_axis": pt(edge.major_axis), "ratio": float(edge.ratio)})
+            elif edge.type == EdgeType.SPLINE:
+                out.append({"edge": "points",
+                            "points": [pt(p) for p in [*edge.control_points, *edge.fit_points]]})
+    return out
 
 
 #: The space every probe used to assume, and still defaults to.
@@ -73,10 +118,12 @@ def collect(doc, space: str = MODEL) -> tuple[list[dict], dict[str, list[dict]]]
     the same definition as one in model space.
     """
     entities = [entity_info(e) for e in entities_in(doc, space)]
+    # Anonymous *D blocks are kept: a DIMENSION is measured by the block it is
+    # drawn from, which mcp:block-bbox reaches through tblobjname.
     blocks = {
         block.name: [entity_info(e) for e in block]
         for block in doc.blocks
-        if not block.name.startswith("*")
+        if not block.name.startswith("*") or block.name.upper().startswith("*D")
     }
     return entities, blocks
 

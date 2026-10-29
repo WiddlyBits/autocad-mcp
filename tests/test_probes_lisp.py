@@ -405,3 +405,27 @@ class TestSnapshotFormatMatches:
         it exists to save."""
         body = _defun_body(source(PROBES_LSP), "mcp:snapshot-in")
         assert "(open tmp \"w\")" in body
+
+
+class TestEntBBoxCoversTheReferenceTypes:
+    """Every type probes.entity_bbox measures needs a branch here too, or
+    bbox-by-layer reports `bbox none` for it on one side only."""
+
+    @pytest.mark.parametrize("kind", ["DIMENSION", "HATCH", "VIEWPORT"])
+    def test_branch_exists(self, kind):
+        body = _defun_body(source(PROBES_LSP), "mcp:ent-bbox-data")
+        assert f'(= kind "{kind}")' in body
+
+    def test_the_layout_viewport_is_skipped(self):
+        body = _defun_body(source(PROBES_LSP), "mcp:ent-bbox-data")
+        assert "(mcp:group data 69 0) 1)" in body
+
+    def test_hatch_reads_only_the_boundary_groups(self):
+        """The group 10s before group 91 (elevation) and after group 75 (seed
+        points) are not boundary geometry."""
+        body = _defun_body(source(PROBES_LSP), "mcp:hatch-bbox")
+        assert "(= code 91)" in body and "(= code 75)" in body
+
+    def test_clipped_viewport_is_not_exact(self):
+        body = _defun_body(source(PROBES_LSP), "mcp:ent-exact-p")
+        assert "(assoc 340 data)" in body

@@ -249,6 +249,46 @@ class TestEntityBBox:
         info = {"type": "INSERT", "name": "OUTER", "insert": [0, 0]}
         assert entity_bbox(info, blocks) == BBox(5, 0, 6, 1)
 
+    def test_dimension_resolves_through_its_block_untransformed(self):
+        """The *D block is already in world coordinates: no insert, no scale."""
+        blocks = {"*D1": [{"type": "LINE", "start": [10, 30], "end": [60, 45]}]}
+        assert entity_bbox({"type": "DIMENSION", "block": "*D1"}, blocks) == BBox(10, 30, 60, 45)
+
+    def test_dimension_without_its_block_has_no_box(self):
+        assert entity_bbox({"type": "DIMENSION", "block": "*D9"}, {}) is None
+
+    def test_viewport_is_its_rectangle(self):
+        info = {"type": "VIEWPORT", "center": [5, 4], "width": 6, "height": 3, "id": 2}
+        assert entity_bbox(info) == BBox(2, 2.5, 8, 5.5)
+
+    def test_the_layout_viewport_has_no_box(self):
+        """ID 1 is the paper-space view itself; its size follows the zoom."""
+        info = {"type": "VIEWPORT", "center": [5, 4], "width": 600, "height": 300, "id": 1}
+        assert entity_bbox(info) is None
+
+    def test_hatch_polyline_path(self):
+        info = {"type": "HATCH", "boundary": [
+            {"edge": "points", "points": [[100, 0], [130, 0], [130, 20], [100, 20]]},
+        ]}
+        assert entity_bbox(info) == BBox(100, 0, 130, 20)
+
+    def test_hatch_arc_edge_counts_the_full_circle(self):
+        info = {"type": "HATCH", "boundary": [
+            {"edge": "points", "points": [[0, 0], [40, 0]]},
+            {"edge": "arc", "center": [40, 10], "radius": 10},
+        ]}
+        assert entity_bbox(info) == BBox(0, 0, 50, 20)
+
+    def test_hatch_ellipse_edge_counts_the_full_ellipse(self):
+        info = {"type": "HATCH", "boundary": [
+            {"edge": "ellipse", "center": [0, 10], "major_axis": [0, 10], "ratio": 0.5},
+        ]}
+        b = entity_bbox(info)
+        assert (b.xmin, b.ymin, b.xmax, b.ymax) == pytest.approx((-5, 0, 5, 20), abs=1e-9)
+
+    def test_hatch_without_a_boundary_has_no_box(self):
+        assert entity_bbox({"type": "HATCH", "boundary": []}) is None
+
 
 class TestExactness:
     """An exact box supports "these do not overlap". An approximate one only
@@ -276,6 +316,16 @@ class TestExactness:
 
     def test_unknown_type_is_not_exact(self):
         assert bbox_is_exact({"type": "SOLID"}) is False
+
+    def test_plain_viewport_is_exact(self):
+        assert bbox_is_exact({"type": "VIEWPORT", "clipped": False}) is True
+
+    def test_clipped_viewport_is_not(self):
+        assert bbox_is_exact({"type": "VIEWPORT", "clipped": True}) is False
+
+    @pytest.mark.parametrize("kind", ["HATCH", "DIMENSION"])
+    def test_hatch_and_dimension_are_not_exact(self, kind):
+        assert bbox_is_exact({"type": kind}) is False
 
 
 class TestBudget:

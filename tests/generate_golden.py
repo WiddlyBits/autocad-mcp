@@ -109,8 +109,54 @@ def generate_pid_example():
     print(f"Generated: {GOLDEN_DIR / 'pid_example.dxf'}")
 
 
+def generate_bbox_types():
+    """Golden file: the types measured from more than their own groups.
+
+    A DIMENSION (through its *D block), HATCH boundaries of every path and edge
+    kind, and a floating VIEWPORT in Layout1. The .snap covers model space; the
+    viewport is there so the same file serves the live Layout1 check.
+    """
+    doc = ezdxf.new("R2013")
+    msp = doc.modelspace()
+    for name in ("DIMS", "HATCH-POLY", "HATCH-EDGE", "VPORTS"):
+        doc.layers.add(name, color=7, linetype="Continuous")
+
+    msp.add_linear_dim(
+        base=(0, 45), p1=(0, 30), p2=(50, 30), dxfattribs={"layer": "DIMS"},
+    ).render()
+
+    # Polyline path.
+    hatch = msp.add_hatch(color=1, dxfattribs={"layer": "HATCH-POLY"})
+    hatch.paths.add_polyline_path([(100, 0), (130, 0), (130, 20), (100, 20)], is_closed=True)
+
+    # Edge path: line, arc, line, elliptical arc, closed.
+    hatch = msp.add_hatch(color=2, dxfattribs={"layer": "HATCH-EDGE"})
+    path = hatch.paths.add_edge_path()
+    path.add_line((0, 0), (40, 0))
+    path.add_arc((40, 10), 10, -90, 90)
+    path.add_line((40, 20), (0, 20))
+    path.add_ellipse((0, 10), major_axis=(0, 10), ratio=0.5, start_angle=0, end_angle=180)
+
+    # Edge path: clamped cubic spline closed by a line.
+    hatch = msp.add_hatch(color=3, dxfattribs={"layer": "HATCH-EDGE"})
+    path = hatch.paths.add_edge_path()
+    path.add_spline(
+        control_points=[(60, 0), (65, 15), (75, 15), (80, 0)],
+        knot_values=[0, 0, 0, 0, 1, 1, 1, 1], degree=3,
+    )
+    path.add_line((80, 0), (60, 0))
+
+    doc.layout("Layout1").add_viewport(
+        center=(5, 4), size=(6, 3), view_center_point=(65, 22), view_height=60,
+        dxfattribs={"layer": "VPORTS"},
+    )
+
+    doc.saveas(str(GOLDEN_DIR / "bbox_types.dxf"))
+    print(f"Generated: {GOLDEN_DIR / 'bbox_types.dxf'}")
+
+
 #: The drawings that carry a committed .snap fixture.
-SNAPSHOT_SOURCES = ("basic_shapes", "pid_example")
+SNAPSHOT_SOURCES = ("basic_shapes", "pid_example", "bbox_types")
 
 
 def snapshot_path(stem: str) -> Path:
@@ -199,6 +245,7 @@ def main(argv=None) -> int:
 
     generate_basic_shapes()
     generate_pid_example()
+    generate_bbox_types()
     print("Done. Snapshots were not touched — see rebaseline_snapshots.")
     return 0
 

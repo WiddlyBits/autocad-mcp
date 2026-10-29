@@ -382,8 +382,57 @@
          (setq rot (/ (* 180.0 (mcp:group data 50 0.0)) pi))
          (mcp:transform-bbox inner ix iy sx sy rot))))
 
+    ((= kind "DIMENSION")
+     ;; Group 2 names the anonymous *D block AutoCAD draws the dimension
+     ;; from. Its members are already in world coordinates, so no transform.
+     (mcp:block-bbox (mcp:group data 2 "") depth))
+
+    ((= kind "HATCH") (mcp:hatch-bbox data))
+
+    ((= kind "VIEWPORT")
+     ;; ID 1 is the layout's own paper-space view. Its size follows the
+     ;; zoom, not anything drawn, so it has no footprint.
+     (if (/= (mcp:group data 69 0) 1)
+       (progn
+         (setq c (mcp:group data 10 '(0 0)))
+         (setq sx (/ (mcp:group data 40 0.0) 2.0) sy (/ (mcp:group data 41 0.0) 2.0))
+         (list (- (car c) sx) (- (cadr c) sy) (+ (car c) sx) (+ (cadr c) sy)))))
+
     (t nil)
   )
+)
+
+(defun mcp:hatch-bbox (data / state poly edge c mj pts box code val)
+  "Union of a HATCH's boundary paths, read in group order.
+   The boundary sits between group 91 (path count) and group 75 (hatch
+   style); the group 10s outside it are the elevation point and the seed
+   points, which are not geometry. Arcs and elliptical arcs count as full
+   curves and splines as their control and fit points: a superset box, which
+   mcp:ent-exact-p declares. Mirrors probes.hatch_bbox."
+  (setq state nil pts '() box nil)
+  (foreach item data
+    (setq code (car item) val (cdr item))
+    (cond
+      ((= state 'done))
+      ((= code 75) (setq state 'done))
+      ((= code 91) (setq state T))
+      ((null state))
+      ;; Group 92 bit 2 marks a polyline path; any other is an edge path.
+      ((= code 92) (setq poly (= 2 (logand val 2)) edge nil))
+      (poly (if (= code 10) (setq pts (cons val pts))))
+      ((= code 72) (setq edge val))
+      ;; Line ends, spline control points (10) and fit points (11).
+      ((and (member code '(10 11)) (member edge '(1 4))) (setq pts (cons val pts)))
+      ((= code 10) (setq c val))
+      ((and (= code 11) (= edge 3)) (setq mj val))
+      ((and (= code 40) (= edge 2))
+       (setq box (mcp:bb-union box (list (- (car c) val) (- (cadr c) val)
+                                         (+ (car c) val) (+ (cadr c) val)))))
+      ((and (= code 40) (= edge 3))
+       (setq box (mcp:bb-union box (mcp:ellipse-bbox (car c) (cadr c) (car mj) (cadr mj) val))))
+    )
+  )
+  (mcp:bb-union box (mcp:bb-of-points pts))
 )
 
 (defun mcp:polyline-vertex-bbox (data / ent vdata pts)
@@ -423,6 +472,8 @@
      (foreach item data
        (if (and (= (car item) 42) (> (abs (cdr item)) 1e-12)) (setq bulged T)))
      (not bulged))
+    ;; A clip boundary (group 340) can be any shape inside the rectangle.
+    ((= kind "VIEWPORT") (null (assoc 340 data)))
     (t nil)  ; ELLIPSE superset, INSERT corner-padded, TEXT nominal, rest unknown
   )
 )

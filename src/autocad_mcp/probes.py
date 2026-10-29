@@ -295,6 +295,8 @@ def bbox_is_exact(info: dict) -> bool:
         # under-reported. This is the one case where the error runs toward a
         # missed overlap rather than a phantom one.
         return not info.get("has_bulge", False)
+    if kind == "VIEWPORT":
+        return not info.get("clipped", False)  # a clip boundary can be any shape inside
     if kind == "ELLIPSE":
         return False  # full-ellipse superset, see ellipse_bbox
     if kind == "INSERT":
@@ -364,7 +366,48 @@ def entity_bbox(
             float(info.get("rotation", 0.0)),
         )
 
+    if kind == "DIMENSION":
+        # Drawn from an anonymous *D block whose members are already in world
+        # coordinates, so the union needs no transform.
+        members = (blocks or {}).get(info.get("block", ""))
+        if not members or _depth >= 4:
+            return None
+        return bbox_union(entity_bbox(m, blocks, _depth + 1) for m in members)
+
+    if kind == "HATCH":
+        return hatch_bbox(info.get("boundary", []))
+
+    if kind == "VIEWPORT":
+        # ID 1 is the layout's own paper-space view; its size follows the
+        # zoom, not anything drawn.
+        if info.get("id") == 1:
+            return None
+        cx, cy = info["center"][:2]
+        hw, hh = float(info["width"]) / 2.0, float(info["height"]) / 2.0
+        return BBox(cx - hw, cy - hh, cx + hw, cy + hh)
+
     return None
+
+
+def hatch_bbox(boundary: Sequence[dict]) -> BBox | None:
+    """Union of a HATCH's boundary edges, from probe_dxf.hatch_boundary.
+
+    Arcs and elliptical arcs count as full curves and splines as their control
+    and fit points, so the box is a superset — bbox_is_exact says so.
+    """
+    boxes: list[BBox | None] = []
+    for edge in boundary:
+        if edge["edge"] == "arc":
+            cx, cy = edge["center"][:2]
+            r = float(edge["radius"])
+            boxes.append(BBox(cx - r, cy - r, cx + r, cy + r))
+        elif edge["edge"] == "ellipse":
+            cx, cy = edge["center"][:2]
+            mx, my = edge["major_axis"][:2]
+            boxes.append(ellipse_bbox(cx, cy, float(mx), float(my), float(edge["ratio"])))
+        else:
+            boxes.append(BBox.of_points(edge["points"]))
+    return bbox_union(boxes)
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +996,13 @@ def entity_segments(info: dict, blocks=None, _depth: int = 0) -> list[tuple]:
             out.extend((place(a), place(b)) for a, b in entity_segments(m, blocks, _depth + 1))
         return out
 
+    if kind == "DIMENSION":
+        members = (blocks or {}).get(info.get("block", ""))
+        if not members or _depth >= 4:
+            return []
+        return [s for m in members for s in entity_segments(m, blocks, _depth + 1)]
+
+    # A VIEWPORT lands here too: its bbox outline is its frame.
     box = entity_bbox(info, blocks)
     return _rect_segments(box) if box else []
 
@@ -962,7 +1012,11 @@ def entity_segments(info: dict, blocks=None, _depth: int = 0) -> list[tuple]:
 #: text picks up that text, it does not fall through the middle of it.
 _OUTLINE_TYPES = {
     "LINE", "CIRCLE", "ARC", "ELLIPSE", "LWPOLYLINE", "POLYLINE", "POINT", "INSERT",
+    "DIMENSION", "VIEWPORT",
 }
+# HATCH stays solid. AutoCAD's crossing test hits a solid fill along its
+# boundary and its internal triangulation edges (measured on LT 2027), which
+# no group code describes; solid is the nearer of the two models available.
 
 
 def selects_as_solid(info: dict) -> bool:
