@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from autocad_mcp.config import SCREENSHOT_MAX_DIMENSION
+
 
 @dataclass
 class CommandResult:
@@ -277,6 +279,18 @@ class AutoCADBackend(ABC):
     async def zoom_window(self, x1: float, y1: float, x2: float, y2: float) -> CommandResult:
         return CommandResult(ok=False, error="Not supported on this backend")
 
-    async def get_screenshot(self) -> CommandResult:
-        """Return base64 PNG in payload."""
+    async def get_screenshot(
+        self,
+        max_dimension: int | None = SCREENSHOT_MAX_DIMENSION,
+        quality: int | None = None,
+        region: tuple[int, int, int, int] | None = None,
+    ) -> CommandResult:
+        """Return the encoded image in payload.
+
+        Payload keys: data (base64), mime, width, height, est_tokens.
+
+        max_dimension caps the longest side in pixels (None = full resolution).
+        quality (1-95), if given, encodes as JPEG instead of PNG.
+        region (left, top, right, bottom) crops the capture before downscaling.
+        """
         return CommandResult(ok=False, error="Not supported on this backend")
