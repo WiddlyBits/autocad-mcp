@@ -1,6 +1,105 @@
-# AutoCAD MCP Server
+# AutoCAD MCP Server: production-hardened fork
 
-MCP server for AutoCAD LT automation and headless DXF generation.
+[![CI](https://github.com/WiddlyBits/autocad-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WiddlyBits/autocad-mcp/actions/workflows/ci.yml)
+
+**Let an AI assistant like Claude work in AutoCAD LT for you, and trust what it tells you.**
+
+This is an improved version of [puran-water/autocad-mcp](https://github.com/puran-water/autocad-mcp).
+Both connect an AI assistant to AutoCAD LT so it can draw, edit and inspect drawings for you. This
+version has been used every day on real engineering drawings, and every problem found along the way
+has been fixed and covered by a test.
+
+> **New to this?** AutoCAD LT is drafting software used for technical drawings. MCP is the standard
+> way to plug a tool into an AI assistant. This repo is that plug.
+
+## Why start here instead of the original?
+
+1. **It doesn't claim work it didn't do.** The original can report "saved" when nothing was saved.
+   That happened on a real drawing. Here every save and DXF export is checked on disk
+   before the assistant is told "done".
+2. **It costs less to run.** AI assistants are billed by how much they read, and they can only hold
+   so much at once (about 200,000 "tokens" of working memory). The original sends every result twice
+   and every screenshot at full size. In one real session, 41 screenshots nearly filled that memory:
+
+   | The same 41 screenshots | Tokens | Share of working memory |
+   |---|---|---|
+   | Original: full size, 1440p monitor | ~196,000 | 98% |
+   | This fork's default (1280 px cap) | ~49,000 | 25% |
+   | Close-ups of just the area that matters | up to ~11,000 | 6% |
+   | Saved to disk, looked at only when needed | 0 | 0% |
+3. **It answers with measurements, not pictures.** To find out whether two things overlap or what a
+   label says, the original can only take a screenshot and look. Here the assistant asks the drawing
+   directly and gets exact numbers and text back.
+4. **When something goes wrong, it says what happened and whether it's safe to try again.** If
+   AutoCAD is busy, in the middle of another command, or showing a different drawing, this version
+   stops and says so. It won't act on the wrong drawing or do the same step twice.
+5. **It's tested.** It has 800+ automated tests that run on every change. The original has 123, and
+   they can't be run out of the box.
+
+### New in this fork
+
+| Feature | What it does for you |
+|---|---|
+| **Drawing probes** | Ask "does this overlap?", "what does this label say?" or "is this area empty?" and get an exact answer, with no screenshot |
+| **Selection handoff** | Select objects in AutoCAD yourself, and the assistant works on exactly those |
+| **Switch drawings** | Moves between open drawings with no click, and confirms which one is active |
+| **Read the command line** | The assistant sees AutoCAD's prompts and errors while a command is running |
+| **Screenshot controls** | Crop to one area, save to disk instead of reading the image, and see each capture's cost |
+| **Assistant skills** | Ready-made working rules that teach the assistant to drive AutoCAD safely ([`skills/`](skills/)) |
+| **Automatic testing** | Every change is tested on GitHub before it lands |
+
+### Improved over the original
+
+| Area | Original | This fork |
+|---|---|---|
+| Saving and DXF export | Reports success without checking. A failed save said "saved", and DXF export wrote no file at all | Checks the file on disk and reports failure if it isn't there |
+| Running cost | Every result sent twice; screenshots at full size | Sent once; screenshots capped at 1280 px (56% fewer tokens on a typical window) |
+| Timeouts | "Timed out" | Says whether the action never started (safe to retry) or may still finish (don't repeat it) |
+| Busy AutoCAD or wrong drawing | Can type into a running command or act on the wrong drawing | Refuses and says why |
+| Erasing | Erasing something already erased brought it back | Reports "not found" |
+| Opening a drawing | Reports success while opening nothing | Says it can't, and names the drawing that is still active |
+| Object details | Type, handle and layer only | Full geometry and extents, the same from both backends |
+| Safety labels | Marks the tool that runs any code as read-only | Each tool labelled correctly, so the assistant knows which actions need your OK |
+
+Known limits are listed openly in [docs/known-issues.md](docs/known-issues.md). Error codes and
+when a retry is safe: [docs/error-model.md](docs/error-model.md).
+
+## What this made possible
+
+Real problems from daily drafting work that the original could not handle, and what happens now.
+
+| Before (original) | Now (this fork) |
+|---|---|
+| **PDF plotting silently did nothing.** The plot command was fed its answers in the wrong order, so the file path landed on the wrong question and no PDF appeared. There was no reliable way to batch-export drawings. | `drawing(plot_pdf)` sends AutoCAD LT 2027's real 18-step plot sequence, captured from a manual run. The included save-verification skill has the assistant confirm the PDF landed. Combined with drawing switching, the assistant can plot one open drawing after another. Currently set up for ARCH D landscape sheets. |
+| **The assistant couldn't move between open drawings.** You had to click the other tab yourself, every time. | `system(switch_doc)` switches with no click and confirms the switch by asking AutoCAD which drawing is active. |
+| **The assistant couldn't see the command line.** When a command stopped at a prompt or failed, you had to copy and paste the command history into the chat by hand. | `system(command_line)` reads the command line and its history directly, even while a command is waiting for input. |
+| **The assistant couldn't work on "the lines I selected".** Your selection in AutoCAD did not carry over, and describing one selection took four separate round trips. | Selection handoff: you select, and one call reports what's selected and edits exactly those objects. In the sessions that prompted it, 129 of 193 tool calls had been spent on this kind of back-and-forth. |
+| **"Saved" didn't mean saved.** A failed save reported success, and the drawing that was still open was the original. | Every save and DXF export is checked on disk. If the file isn't there, you're told. |
+
+Each fix is backed by tests, and the working rules the assistant follows are in [`skills/`](skills/),
+so a beginner doesn't need to know any of this to benefit from it.
+
+## Contributing back upstream
+
+The improvements are going back to the original as a stack of small pull requests. Each one has its
+own tests and a green CI run:
+
+| PR | Change | Tests after |
+|---|---|---|
+| [#2](https://github.com/WiddlyBits/autocad-mcp/pull/2) | Build + CI: runnable tests, ruff, GitHub Actions | 123 |
+| [#3](https://github.com/WiddlyBits/autocad-mcp/pull/3) | Stop sending every tool result twice | 131 |
+| [#4](https://github.com/WiddlyBits/autocad-mcp/pull/4) | Screenshot cost controls | 169 |
+| [#5](https://github.com/WiddlyBits/autocad-mcp/pull/5) | `readOnlyHint` / `destructiveHint` on every tool | 178 |
+| [#6](https://github.com/WiddlyBits/autocad-mcp/pull/6) | Entity geometry and extents, same shape on both backends | 227 |
+| [#7](https://github.com/WiddlyBits/autocad-mcp/pull/7) | Drawing probes: Python reference, AutoLISP port, golden fixtures | 599 |
+| [#8](https://github.com/WiddlyBits/autocad-mcp/pull/8) | IPC timeouts, verified saves, stale-state recovery | 640 |
+| [#9](https://github.com/WiddlyBits/autocad-mcp/pull/9) | Command claim, active-command refusal, `assert_doc` | 693 |
+| [#10](https://github.com/WiddlyBits/autocad-mcp/pull/10) | Error model and retry policy docs | 693 |
+
+Still fork-only for now: selection handoff, measured writes, `system(command_line)`, `switch_doc`,
+`drawing(plot_pdf)` and the assistant skills.
+
+## Technical overview
 
 Two backends, one API:
 
@@ -25,7 +124,7 @@ The server exposes **8 consolidated tools** (`drawing`, `entity`, `layer`, `bloc
 ### 1. Clone and install
 
 ```powershell
-git clone https://github.com/puran-water/autocad-mcp.git
+git clone https://github.com/WiddlyBits/autocad-mcp.git
 cd autocad-mcp
 uv sync
 ```
@@ -162,11 +261,7 @@ Screenshots use `PrintWindow` (Win32) for the File IPC backend — works even wh
 
 Every successful capture reports `width`, `height`, and `est_tokens` — what looking at it costs.
 
-**`region` is the strongest lever, because cropping precedes the downscale.** A 500×400 crop costs 270 visual tokens at native resolution; the whole 1928×1218 window costs 1,334 even after being downscaled to 1280 — and that downscale is exactly what makes small dimension text unreadable. For a detail check a crop is both ~5× cheaper and sharper.
-
-**`save_to` removes the cost entirely rather than reducing it.** The image goes to disk and nothing enters the context window, so a long edit can drop checkpoints as it goes and spend tokens reading back only the one that turned out to matter.
-
-**`max_dimension` is the parameter that controls cost.** Vision models bill an image as `ceil(width/28) * ceil(height/28)` visual tokens — a function of dimensions only, independent of file size or format. A 2560×1440 window costs 4,784 visual tokens uncapped and 1,196 at `max_dimension=1280`; a 1928×1218 window costs 3,036 and 1,334 respectively. Halving the cap roughly quarters the cost.
+**How cost is counted.** Vision models bill an image as `ceil(width/28) * ceil(height/28)` tokens: pixel dimensions only, not file size or format. A 2560×1440 window costs 4,784 uncapped and 1,196 at the 1280 default. A 500×400 `region` crop costs 270 and stays sharp, because cropping happens before the downscale. `save_to` costs nothing until the file is read.
 
 Two consequences worth knowing:
 
@@ -198,6 +293,25 @@ Python MCP Server (autocad_mcp)
 ```
 
 The File IPC backend sends keystrokes to AutoCAD's MDIClient window via `PostMessageW(WM_CHAR)`, triggering the `(c:mcp-dispatch)` AutoLISP command. This approach does **not** steal window focus — you can continue working in other applications while automation runs.
+
+One File IPC round trip, including how a timeout is classified:
+
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant S as Python server
+    participant F as IPC dir (C:/temp)
+    participant A as AutoCAD LT
+    C->>S: tool call (stdio)
+    S->>F: write cmd_{id}.json (tmp + rename)
+    S->>A: PostMessageW(WM_CHAR) "(c:mcp-dispatch)", no focus steal
+    A->>F: claim: rename cmd_{id} to run_{id}
+    A->>A: run the command
+    A->>F: write result_{id}.json
+    S->>F: poll for result_{id}.json
+    S->>C: result (saves checked on disk)
+    Note over S,F: On timeout: still cmd_{id} means never started (timeout_not_dispatched, safe to retry).<br/>run_{id} on a write means it may still land (timeout_mutating, do not blind-retry).
+```
 
 ## Environment Variables
 
@@ -235,21 +349,6 @@ The `mcp_dispatch.lsp` dispatcher is fully compatible with LT 2024+.
 ## Notable engineering
 
 - **[Switching drawings without a click](docs/investigations/2026-10-16-document-switching.md)** (2026-10-16). LT has no COM, refuses OPEN from LISP, and `vla-Activate` reports a switch that never happens. Synthetic Ctrl+Tab was disproved; `GetGUIThreadInfo` showed the Start tab's embedded Chromium widget holding keyboard focus. Fix: `WM_MDIACTIVATE` on the frame's `MDIClient`, confirmed by `DWGNAME`. Also closed a silent fall-through to the headless backend while Start was in front.
-
-## What's New in v3.1
-
-- **`execute_lisp`** — Run arbitrary AutoLISP code via temp file pattern. Turns the server from a fixed command set into an extensible automation platform.
-- **Undo / Redo** — Single-step undo and redo via `drawing` tool.
-- **Drawing open** — ~~Open existing `.dwg` files programmatically~~ **This did not work.** AutoCAD refuses OPEN from inside `(command ...)` for the same reason `drawing create` cannot use `_.NEW`: it would tear down the document whose LISP namespace is running the dispatcher. `(command ...)` returns no status, so the branch reported `{"ok": true, "payload": "opened: <path>"}` while opening nothing — confirmed against LT 2027, `DWGNAME` unchanged and no new tab. The branch now compares the active document against the requested path and returns `ok: false` naming the document it is still in. It succeeds only when the file is *already* the active document, which makes it a cheap way to confirm which document you are in. To change between drawings that are already open, use `system(switch_doc)`. To open a new one, open the file from the AutoCAD UI and load `mcp_dispatch.lsp` in it, or use the ezdxf backend to read the file without AutoCAD.
-- **Drawing create** — Now resets current drawing (erase all + purge) instead of `_.NEW`, preserving the LISP dispatcher namespace.
-- **Drawing save with path** — `save` with a `path` parameter uses SAVEAS; without path uses QSAVE. Both outcomes are now **measured, not asserted**: this branch used to answer `{"ok": true, "payload": "saved to: <path>"}` whether or not the file was written — confirmed live from a SAVEAS that had failed with the original document still active. SAVEAS renames the active document to the file it wrote, so the path form returns `ok: false` unless the document it ends in *is* that file; the no-path form reads `DBMOD` instead (0 after a successful save). A drawing that has never been saved is refused rather than left waiting on a filename prompt. A path given without a `.dwg` extension reports failure, since SAVEAS appends one.
-- **`save_as_dxf` writes via DXFOUT** — it used to call SAVEAS with a `DXF` format keyword, which on LT 2027 wrote **no file at all** while returning `ok: true`, and renamed the active document so that a later bare `save` (QSAVE) wrote DXF over the drawing. DXFOUT has neither problem: it writes the file and leaves the document alone. Because DXFOUT reports nothing on failure — pointed at a missing folder it returns without error and writes nothing — the export is gated on the file's timestamp moving, not on the file merely existing, so re-exporting over a stale DXF cannot be mistaken for a success. FILEDIA suppressed and restored.
-- **`get_variables` fix** — Respects the `names` parameter; returns requested variables with proper type handling.
-- **Polyline/leader fix** — Point arrays properly encoded via semicolon-delimited format.
-- **ESC prefix** — Sends 2x ESC before each dispatch to cancel stale pending commands from prior timeouts.
-- **UTF-8/cp1252 fallback** — Handles non-ASCII characters in LISP result files (AutoCAD writes Windows-1252).
-- **Configurable IPC timeout** — `AUTOCAD_MCP_IPC_TIMEOUT` env var (1–300 seconds, default 10).
-- **Thread-safe backend init** — `asyncio.Lock` prevents parallel initialization races.
 
 ## License
 
