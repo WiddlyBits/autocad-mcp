@@ -27,6 +27,13 @@ fix (every create verb reports its layer, both backends) is on the `series/10b-c
 stack and lands when that merges (decided 2026-10-28), so `mcp_dispatch.lsp` takes the
 change once instead of from two parents.
 
+**`drawing(plot_pdf)` does not check the PDF on disk, and paper is fixed to ARCH D.**
+`mcp-cmd-drawing-plot-pdf` returns `{path, dbmod_before, dbmod_after, dbmod_restored}` once
+`-PLOT` finishes; it never runs `findfile` on the output, so a failed plot still returns ok.
+Confirm with `(findfile path)` or the `autocad-save-verification` skill. The `-PLOT` sequence
+hard-codes `DWG To PDF.pc3`, `ARCH D (36.00 x 24.00 Inches)` and landscape; other sheet sizes
+need a code change. Shipped this way in v3.2.0 (2026-10-30).
+
 **`expected_doc` is backend-only.** No tool sets the `expected_doc` argument of
 `_dispatch`/`execute_lisp`; only backend code can. A tool caller gets the same check by calling
 `system(assert_doc)` first, at the cost of one extra round trip.
