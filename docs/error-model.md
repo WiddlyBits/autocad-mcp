@@ -139,7 +139,7 @@ and has no automatic rollback.
 | **Origin** | LISP-dispatch |
 | **Trigger** | `CMDNAMES` is non-empty when the dispatcher runs. |
 | **Payload** | `active: <cmdnames>` |
-| **Notes** | Inert for IPC calls — see `known-issues.md`. `autocad_busy` catches the condition earlier. |
+| **Notes** | Live-verified on LT 2027 (2026-10-14): `create_line`, `execute_lisp` and `entity(count)` sent while `LINE` waited for a point all returned `command_active`. `autocad_busy` catches the same condition earlier where COM is available. |
 
 ### `WRONG-DOC`
 

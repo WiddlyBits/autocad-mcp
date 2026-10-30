@@ -657,6 +657,19 @@ class TestAssertDoc:
         assert result.error == "timeout_mutating"
 
     @pytest.mark.asyncio
+    async def test_quote_and_backslash_stay_inside_one_lisp_string(self):
+        """A name holding " or \\ is escaped, so the form has exactly one string argument."""
+        from unittest.mock import patch, AsyncMock
+        from autocad_mcp.backends.file_ipc import FileIPCBackend
+        backend = FileIPCBackend()
+        name = 'a"b\\c.dwg'
+        with patch.object(backend, "execute_lisp", new_callable=AsyncMock) as mock_lisp:
+            mock_lisp.return_value = CommandResult(ok=True, payload="OK")
+            result = await backend.assert_doc(name)
+        assert mock_lisp.call_args.args[0] == '(mcp:assert-doc "a\\"b\\\\c.dwg")'
+        assert result.payload["doc"] == name
+
+    @pytest.mark.asyncio
     async def test_base_backend_returns_not_supported(self):
         from autocad_mcp.backends.ezdxf_backend import EzdxfBackend
         backend = EzdxfBackend()

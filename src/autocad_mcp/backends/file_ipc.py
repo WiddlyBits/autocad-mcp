@@ -583,7 +583,7 @@ class FileIPCBackend(AutoCADBackend):
     async def redo(self) -> CommandResult:
         return CommandResult(
             ok=False,
-            error="Redo is not available through MCP dispatch — the dispatch command clears the redo stack",
+            error="Redo is not available through MCP dispatch; run REDO at the AutoCAD command line",
         )
 
     # --- Freehand LISP execution ---
@@ -613,7 +613,9 @@ class FileIPCBackend(AutoCADBackend):
         {"expected": ..., "actual": <raw LISP payload>} in payload.
         Propagates any execute_lisp error (e.g. probes not loaded) unchanged.
         """
-        result = await self.execute_lisp(f'(mcp:assert-doc "{expected_name}")')
+        # Backslash first, so the quote escapes are not themselves doubled.
+        lisp_name = expected_name.replace("\\", "\\\\").replace('"', '\\"')
+        result = await self.execute_lisp(f'(mcp:assert-doc "{lisp_name}")')
         if not result.ok:
             return result
         if result.payload == "OK":
